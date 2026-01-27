@@ -99,7 +99,7 @@ func TestParseLevel(t *testing.T) {
 		{"panic", PanicLevel, false},
 		{"disabled", Disabled, false},
 		{"off", Disabled, false},
-		{"", NoLevel, false},
+		{"", NoLevel, true},
 		{"  info  ", InfoLevel, false},
 		{"invalid", NoLevel, true},
 		{"unknown", NoLevel, true},

@@ -139,7 +139,7 @@ func ParseLevel(s string) (Level, error) {
 	case "disabled", "off":
 		return Disabled, nil
 	case "":
-		return NoLevel, nil
+		return NoLevel, fmt.Errorf("empty log level")
 	default:
 		return NoLevel, fmt.Errorf("unknown log level: %s", s)
 	}

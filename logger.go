@@ -170,6 +170,12 @@ func (l *Logger) Zerolog() zerolog.Logger {
 	return l.zl
 }
 
+// ZerologPtr returns a pointer to the underlying zerolog.Logger for use with
+// libraries that require *zerolog.Logger (e.g. middleware-kit).
+func (l *Logger) ZerologPtr() *zerolog.Logger {
+	return &l.zl
+}
+
 // LevelManager returns the level manager for this logger.
 func (l *Logger) LevelManager() *LevelManager {
 	return l.levelMg
