@@ -1,5 +1,12 @@
 # Logger Kit
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/logger-kit.svg)](https://pkg.go.dev/github.com/soulteary/logger-kit)
+[![Go Report Card](https://goreportcard.com/badge/github.com/soulteary/logger-kit)](https://goreportcard.com/report/github.com/soulteary/logger-kit)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![codecov](https://codecov.io/gh/soulteary/logger-kit/graph/badge.svg)](https://codecov.io/gh/soulteary/logger-kit)
+
+[中文文档](README_CN.md)
+
 A structured logging toolkit for Go applications based on [zerolog](https://github.com/rs/zerolog). Provides dynamic log level management, context-based logging, and HTTP endpoints for runtime log level adjustment.
 
 ## Features

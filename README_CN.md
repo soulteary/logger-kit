@@ -1,5 +1,12 @@
 # Logger Kit
 
+[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/logger-kit.svg)](https://pkg.go.dev/github.com/soulteary/logger-kit)
+[![Go Report Card](https://goreportcard.com/badge/github.com/soulteary/logger-kit)](https://goreportcard.com/report/github.com/soulteary/logger-kit)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
+[![codecov](https://codecov.io/gh/soulteary/logger-kit/graph/badge.svg)](https://codecov.io/gh/soulteary/logger-kit)
+
+[English](README.md)
+
 基于 [zerolog](https://github.com/rs/zerolog) 的 Go 应用结构化日志工具包。提供动态日志级别管理、基于上下文的日志记录，以及用于运行时日志级别调整的 HTTP 端点。
 
 ## 功能特性
