@@ -183,16 +183,19 @@ func ValidLevelStrings() []string {
 
 // LevelManager provides thread-safe log level management.
 type LevelManager struct {
-	mu       sync.RWMutex
-	level    Level
-	onChange []func(old, new Level)
+	mu         sync.RWMutex
+	level      Level
+	onChange   []func(old, new Level)
+	onChangeID []int64
+	nextID     int64
 }
 
 // NewLevelManager creates a new LevelManager with the given initial level.
 func NewLevelManager(initial Level) *LevelManager {
 	return &LevelManager{
-		level:    initial,
-		onChange: make([]func(old, new Level), 0),
+		level:      initial,
+		onChange:   make([]func(old, new Level), 0),
+		onChangeID: make([]int64, 0),
 	}
 }
 
@@ -225,15 +228,20 @@ func (m *LevelManager) SetLevel(level Level) {
 func (m *LevelManager) OnChange(cb func(old, new Level)) func() {
 	m.mu.Lock()
 	defer m.mu.Unlock()
+	id := m.nextID
+	m.nextID++
 	m.onChange = append(m.onChange, cb)
+	m.onChangeID = append(m.onChangeID, id)
 
-	// Return unregister function
-	idx := len(m.onChange) - 1
 	return func() {
 		m.mu.Lock()
 		defer m.mu.Unlock()
-		if idx < len(m.onChange) {
-			m.onChange = append(m.onChange[:idx], m.onChange[idx+1:]...)
+		for i := range m.onChangeID {
+			if m.onChangeID[i] == id {
+				m.onChange = append(m.onChange[:i], m.onChange[i+1:]...)
+				m.onChangeID = append(m.onChangeID[:i], m.onChangeID[i+1:]...)
+				break
+			}
 		}
 	}
 }

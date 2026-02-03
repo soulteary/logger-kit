@@ -94,6 +94,15 @@ type ConsoleWriterConfig struct {
 	FormatErrFieldValue zerolog.Formatter
 }
 
+// SensitiveFieldNames lists common log field names that often contain secrets.
+// When using console format, avoid logging these without redaction, or set a custom
+// FormatFieldValue that masks values. The default FormatFieldValue uses %v and may
+// expose details (e.g. error strings, types implementing String()).
+var SensitiveFieldNames = []string{
+	"password", "token", "secret", "key", "authorization", "cookie",
+	"api_key", "apikey", "access_token", "refresh_token", "session",
+}
+
 // DefaultConsoleWriterConfig returns the default console writer configuration.
 func DefaultConsoleWriterConfig() ConsoleWriterConfig {
 	return ConsoleWriterConfig{

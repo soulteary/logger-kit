@@ -18,6 +18,12 @@ A structured logging toolkit for Go applications based on [zerolog](https://gith
 - **Middleware**: Request logging middleware for both net/http and Fiber
 - **Format Options**: JSON and human-readable console output
 
+## Security
+
+- **Level endpoint**: In production, always set `AllowedIPs` or `RequireAuth`; do not expose the endpoint publicly. When behind a reverse proxy, set `TrustedProxies` to your proxy IPs.
+- **Query/body logging**: Query parameters are logged by default; use `SensitiveQueryParams` (default list redacts common keys like `password`, `token`) to avoid leaking secrets. Avoid enabling `IncludeBody` on sensitive routes.
+- See [SECURITY.md](SECURITY.md) for details and how to report vulnerabilities.
+
 ## Installation
 
 ```bash
@@ -132,6 +138,8 @@ func main() {
 // GET /log/level - Get current log level
 // PUT /log/level - Set log level (body: {"level": "debug"})
 ```
+
+**Security (Level endpoint):** In production you must set `AllowedIPs` or `RequireAuth` so only trusted callers can change the log level. Do not expose this endpoint to the public. When behind a reverse proxy, set `TrustedProxies` to your proxy IPs so client IP checks work correctly. See [SECURITY.md](SECURITY.md) for details.
 
 ### Request Logging Middleware
 
@@ -317,22 +325,26 @@ type Config struct {
 
 ```go
 type MiddlewareConfig struct {
-    Logger            *Logger       // Logger instance
-    SkipPaths         []string      // Paths to skip logging
-    SkipFunc          func(*http.Request) bool // Custom skip function
-    LogLevel          Level         // Level for 2xx responses
-    WarnLevel         Level         // Level for 4xx responses
-    ErrorLevel        Level         // Level for 5xx responses
-    IncludeRequestID  bool          // Generate/propagate request ID
-    RequestIDHeader   string        // Header name for request ID
-    IncludeLatency    bool          // Log request duration
-    IncludeHeaders    bool          // Log request headers
-    SensitiveHeaders  []string      // Headers to redact
-    IncludeQuery      bool          // Log query parameters
-    IncludeBody       bool          // Log request body
-    MaxBodySize       int           // Max body size to log
+    Logger                *Logger       // Logger instance
+    SkipPaths             []string      // Paths to skip logging
+    SkipFunc              func(*http.Request) bool // Custom skip function
+    LogLevel              Level         // Level for 2xx responses
+    WarnLevel             Level         // Level for 4xx responses
+    ErrorLevel            Level         // Level for 5xx responses
+    IncludeRequestID     bool          // Generate/propagate request ID
+    RequestIDHeader      string        // Header name for request ID
+    IncludeLatency       bool          // Log request duration
+    IncludeHeaders       bool          // Log request headers
+    SensitiveHeaders     []string      // Headers to redact
+    IncludeQuery         bool          // Log query parameters
+    SensitiveQueryParams []string      // Query keys to redact (nil = no redaction; empty = use default list)
+    IncludeBody          bool          // Log request body (Fiber only for body; use with caution)
+    MaxBodySize          int           // Max body size to log
+    TrustedProxies       []string      // Proxy IPs/CIDRs for client IP from X-Forwarded-For
 }
 ```
+
+**Sensitive data:** `IncludeQuery` is true by default; query strings often contain tokens or passwords. Use `SensitiveQueryParams` (default list includes `password`, `token`, `code`, `secret`, `api_key`, etc.) to redact those values in logs. Set to `nil` to disable query redaction. `IncludeBody` is false by default; enabling it can log credentials—use only for non-sensitive routes or redact before logging. For console format, the default field value formatter uses `%v`; avoid logging sensitive fields (see `logger.SensitiveFieldNames`) or set a custom `FormatFieldValue` to mask them.
 
 ## Testing
 

@@ -1,11 +1,15 @@
 package logger
 
 import (
+	"bytes"
+	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/gofiber/fiber/v2"
+	"github.com/google/uuid"
 	"github.com/rs/zerolog"
 )
 
@@ -66,6 +70,10 @@ type MiddlewareConfig struct {
 	// Default: true
 	IncludeQuery bool
 
+	// SensitiveQueryParams is a list of query parameter names to redact (value replaced with "***").
+	// When empty, defaultSensitiveQueryParams is used. Set to nil to disable query redaction.
+	SensitiveQueryParams []string
+
 	// IncludeBody includes request body in logs.
 	// Warning: This may log sensitive data.
 	// Default: false
@@ -81,6 +89,11 @@ type MiddlewareConfig struct {
 
 	// CustomFieldsFiber adds custom fields to each log entry (Fiber).
 	CustomFieldsFiber func(c *fiber.Ctx) map[string]interface{}
+
+	// TrustedProxies is a list of proxy IPs (or CIDRs). When non-empty, X-Forwarded-For
+	// and X-Real-IP are only used for the "ip" log field when the direct peer is in this list.
+	// When empty (default), only RemoteAddr is used. Set this when behind a reverse proxy.
+	TrustedProxies []string
 }
 
 // DefaultMiddlewareConfig returns the default middleware configuration.
@@ -101,7 +114,52 @@ func DefaultMiddlewareConfig() MiddlewareConfig {
 			"Cookie",
 			"Set-Cookie",
 		},
+		SensitiveQueryParams: defaultSensitiveQueryParams,
 	}
+}
+
+// defaultSensitiveQueryParams are query keys redacted in logs when SensitiveQueryParams is empty.
+var defaultSensitiveQueryParams = []string{
+	"password", "token", "code", "secret", "key", "api_key", "apikey",
+	"access_token", "refresh_token", "session", "session_id",
+}
+
+// redactQuery redacts sensitive query parameters. If sensitiveKeys is nil, returns rawQuery unchanged.
+func redactQuery(rawQuery string, sensitiveKeys []string) string {
+	if rawQuery == "" {
+		return ""
+	}
+	if sensitiveKeys == nil {
+		return rawQuery
+	}
+	keysMap := make(map[string]bool)
+	for _, k := range sensitiveKeys {
+		keysMap[strings.ToLower(strings.TrimSpace(k))] = true
+	}
+	vals, err := url.ParseQuery(rawQuery)
+	if err != nil {
+		return rawQuery
+	}
+	var buf strings.Builder
+	for k, v := range vals {
+		keyLower := strings.ToLower(k)
+		if keysMap[keyLower] {
+			buf.WriteString(url.QueryEscape(k))
+			buf.WriteString("=***&")
+		} else {
+			for _, vv := range v {
+				buf.WriteString(url.QueryEscape(k))
+				buf.WriteString("=")
+				buf.WriteString(url.QueryEscape(vv))
+				buf.WriteString("&")
+			}
+		}
+	}
+	s := buf.String()
+	if len(s) > 0 {
+		s = s[:len(s)-1]
+	}
+	return s
 }
 
 // responseWriter wraps http.ResponseWriter to capture status code.
@@ -155,6 +213,11 @@ func Middleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 		sensitiveHeaderMap[strings.ToLower(h)] = true
 	}
 
+	sensitiveQueryKeys := cfg.SensitiveQueryParams
+	if cfg.SensitiveQueryParams != nil && len(cfg.SensitiveQueryParams) == 0 {
+		sensitiveQueryKeys = defaultSensitiveQueryParams
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			// Skip if path is in skip list
@@ -195,6 +258,12 @@ func Middleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 			// Add logger to context
 			r = r.WithContext(ContextWithLogger(r.Context(), cfg.Logger))
 
+			var requestBodyForLog []byte
+			if cfg.IncludeBody && (r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch) && r.Body != nil {
+				requestBodyForLog, _ = io.ReadAll(io.LimitReader(r.Body, int64(cfg.MaxBodySize)))
+				r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(requestBodyForLog), r.Body))
+			}
+
 			// Wrap response writer to capture status
 			rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
 
@@ -224,7 +293,7 @@ func Middleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 				Str("method", r.Method).
 				Str("path", r.URL.Path).
 				Int("status", rw.status).
-				Str("ip", getClientIPStd(r)).
+				Str("ip", getClientIPStd(r, cfg.TrustedProxies)).
 				Str("user_agent", r.UserAgent())
 
 			// Add request ID
@@ -237,9 +306,9 @@ func Middleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 				event = event.Dur("latency", latency)
 			}
 
-			// Add query parameters
+			// Add query parameters (with sensitive keys redacted)
 			if cfg.IncludeQuery && r.URL.RawQuery != "" {
-				event = event.Str("query", r.URL.RawQuery)
+				event = event.Str("query", redactQuery(r.URL.RawQuery, sensitiveQueryKeys))
 			}
 
 			// Add headers
@@ -253,6 +322,15 @@ func Middleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 					}
 				}
 				event = event.Interface("headers", headers)
+			}
+
+			// Add request body (net/http: from buffered peek)
+			if cfg.IncludeBody && len(requestBodyForLog) > 0 {
+				if len(requestBodyForLog) >= cfg.MaxBodySize {
+					event = event.Str("request_body", string(requestBodyForLog)+"...[truncated]")
+				} else {
+					event = event.Str("request_body", string(requestBodyForLog))
+				}
 			}
 
 			// Add response size
@@ -303,6 +381,11 @@ func FiberMiddleware(cfg MiddlewareConfig) fiber.Handler {
 	}
 	for _, h := range cfg.SensitiveHeaders {
 		sensitiveHeaderMap[strings.ToLower(h)] = true
+	}
+
+	sensitiveQueryKeysFiber := cfg.SensitiveQueryParams
+	if cfg.SensitiveQueryParams != nil && len(cfg.SensitiveQueryParams) == 0 {
+		sensitiveQueryKeysFiber = defaultSensitiveQueryParams
 	}
 
 	return func(c *fiber.Ctx) error {
@@ -371,7 +454,7 @@ func FiberMiddleware(cfg MiddlewareConfig) fiber.Handler {
 			Str("method", c.Method()).
 			Str("path", c.Path()).
 			Int("status", status).
-			Str("ip", c.IP()).
+			Str("ip", getClientIPFiber(c, cfg.TrustedProxies)).
 			Str("user_agent", c.Get("User-Agent"))
 
 		// Add request ID
@@ -384,25 +467,25 @@ func FiberMiddleware(cfg MiddlewareConfig) fiber.Handler {
 			event = event.Dur("latency", latency)
 		}
 
-		// Add query parameters
+		// Add query parameters (with sensitive keys redacted)
 		if cfg.IncludeQuery {
 			query := c.Request().URI().QueryString()
 			if len(query) > 0 {
-				event = event.Str("query", string(query))
+				event = event.Str("query", redactQuery(string(query), sensitiveQueryKeysFiber))
 			}
 		}
 
 		// Add headers
 		if cfg.IncludeHeaders {
 			headers := make(map[string]string)
-			c.Request().Header.VisitAll(func(key, value []byte) {
+			for key, value := range c.Request().Header.All() {
 				headerName := string(key)
 				if sensitiveHeaderMap[strings.ToLower(headerName)] {
 					headers[headerName] = "[REDACTED]"
 				} else {
 					headers[headerName] = string(value)
 				}
-			})
+			}
 			event = event.Interface("headers", headers)
 		}
 
@@ -463,39 +546,7 @@ func CtxFiber(c *fiber.Ctx) *zerolog.Logger {
 	return &logger
 }
 
-// generateUUID generates a simple UUID v4.
+// generateUUID generates a UUID v4 using crypto/rand (via google/uuid).
 func generateUUID() string {
-	// Simple UUID generation without external dependency
-	// Format: xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx
-	const hexChars = "0123456789abcdef"
-	uuid := make([]byte, 36)
-
-	for i := range uuid {
-		switch i {
-		case 8, 13, 18, 23:
-			uuid[i] = '-'
-		case 14:
-			uuid[i] = '4'
-		case 19:
-			uuid[i] = hexChars[(randByte()&0x3)|0x8]
-		default:
-			uuid[i] = hexChars[randByte()&0xf]
-		}
-	}
-
-	return string(uuid)
-}
-
-// randByte returns a pseudo-random byte.
-// Uses a combination of time, counter, and memory address for better uniqueness.
-var randCounter uint64
-var randSeed = uint64(time.Now().UnixNano())
-
-func randByte() byte {
-	randCounter++
-	// Mix multiple sources of entropy
-	now := uint64(time.Now().UnixNano())
-	mixed := now ^ randSeed ^ (randCounter * 6364136223846793005)
-	randSeed = mixed
-	return byte(mixed >> ((randCounter % 8) * 8))
+	return uuid.New().String()
 }

@@ -2,6 +2,7 @@ package logger
 
 import (
 	"encoding/json"
+	"net"
 	"net/http"
 	"strings"
 
@@ -18,6 +19,13 @@ type LevelHandlerConfig struct {
 	// If empty, all IPs are allowed.
 	AllowedIPs []string
 
+	// TrustedProxies is a list of proxy IPs (or CIDRs). When non-empty, X-Forwarded-For
+	// and X-Real-IP are only used when the direct peer (RemoteAddr) is in this list;
+	// otherwise the client IP is taken from RemoteAddr only. When empty (default),
+	// proxy headers are never trusted, preventing IP spoofing.
+	// When behind a reverse proxy, set this to your proxy IPs so AllowedIPs works correctly.
+	TrustedProxies []string
+
 	// RequireAuth enables authentication check.
 	// If true, requests must pass the AuthFunc check.
 	RequireAuth bool
@@ -29,6 +37,10 @@ type LevelHandlerConfig struct {
 	// AuthFuncFiber is a custom authentication function for Fiber.
 	// Returns true if the request is authenticated.
 	AuthFuncFiber func(c *fiber.Ctx) bool
+
+	// MaxBodyBytes limits the request body size for PUT/POST (default 4096).
+	// Requests larger than this return 413 Request Entity Too Large.
+	MaxBodyBytes int64
 }
 
 // DefaultLevelHandlerConfig returns the default configuration.
@@ -51,6 +63,9 @@ type LevelRequest struct {
 	Level string `json:"level"`
 }
 
+// DefaultLevelMaxBodyBytes is the maximum request body size for level PUT/POST (4KB).
+const DefaultLevelMaxBodyBytes = 4096
+
 // LevelHandler returns an HTTP handler for managing log levels.
 // GET: Returns the current log level.
 // PUT/POST: Sets a new log level.
@@ -66,7 +81,7 @@ func LevelHandler(cfg LevelHandlerConfig) http.Handler {
 
 		// Check allowed IPs
 		if len(cfg.AllowedIPs) > 0 {
-			clientIP := getClientIPStd(r)
+			clientIP := getClientIPStd(r, cfg.TrustedProxies)
 			allowed := false
 			for _, ip := range cfg.AllowedIPs {
 				if ip == clientIP {
@@ -100,10 +115,18 @@ func LevelHandler(cfg LevelHandlerConfig) http.Handler {
 			}
 
 		case http.MethodPut, http.MethodPost:
-			// Parse request
+			maxBody := cfg.MaxBodyBytes
+			if maxBody <= 0 {
+				maxBody = DefaultLevelMaxBodyBytes
+			}
+			r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+
 			var req LevelRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-				// Try query parameter
+				if isRequestBodyTooLarge(err) {
+					http.Error(w, "Request Entity Too Large", http.StatusRequestEntityTooLarge)
+					return
+				}
 				req.Level = r.URL.Query().Get("level")
 			}
 
@@ -173,7 +196,7 @@ func LevelHandlerFiber(cfg LevelHandlerConfig) fiber.Handler {
 
 		// Check allowed IPs
 		if len(cfg.AllowedIPs) > 0 {
-			clientIP := c.IP()
+			clientIP := getClientIPFiber(c, cfg.TrustedProxies)
 			allowed := false
 			for _, ip := range cfg.AllowedIPs {
 				if ip == clientIP {
@@ -202,10 +225,22 @@ func LevelHandlerFiber(cfg LevelHandlerConfig) fiber.Handler {
 			})
 
 		case fiber.MethodPut, fiber.MethodPost:
-			// Parse request
+			maxBody := cfg.MaxBodyBytes
+			if maxBody <= 0 {
+				maxBody = DefaultLevelMaxBodyBytes
+			}
+			body := c.Body()
+			if len(body) > int(maxBody) {
+				return c.Status(fiber.StatusRequestEntityTooLarge).JSON(fiber.Map{
+					"error": "Request Entity Too Large",
+				})
+			}
+
 			var req LevelRequest
-			if err := c.BodyParser(&req); err != nil {
-				// Try query parameter
+			if len(body) > 0 {
+				_ = json.Unmarshal(body, &req)
+			}
+			if req.Level == "" {
 				req.Level = c.Query("level")
 			}
 
@@ -242,27 +277,96 @@ func LevelHandlerFiber(cfg LevelHandlerConfig) fiber.Handler {
 	}
 }
 
+// remoteIPFromAddr extracts the IP from "host:port" or "[host]:port" (IPv6).
+func remoteIPFromAddr(addr string) string {
+	if addr == "" {
+		return ""
+	}
+	// IPv6: "[::1]:1234" -> "::1"
+	if len(addr) >= 2 && addr[0] == '[' {
+		if end := strings.Index(addr, "]"); end != -1 {
+			return addr[1:end]
+		}
+	}
+	// IPv4: "192.168.1.1:1234" -> "192.168.1.1"
+	if idx := strings.LastIndex(addr, ":"); idx != -1 {
+		return addr[:idx]
+	}
+	return addr
+}
+
+// isIPInTrustedList returns true if ip is in the trusted list (exact match or CIDR).
+func isIPInTrustedList(ipStr string, list []string) bool {
+	if len(list) == 0 {
+		return false
+	}
+	ip := net.ParseIP(ipStr)
+	if ip == nil {
+		return false
+	}
+	for _, s := range list {
+		s = strings.TrimSpace(s)
+		if strings.Contains(s, "/") {
+			_, network, err := net.ParseCIDR(s)
+			if err != nil {
+				continue
+			}
+			if network.Contains(ip) {
+				return true
+			}
+		} else {
+			if net.ParseIP(s).Equal(ip) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// isRequestBodyTooLarge reports whether the error is from http.MaxBytesReader.
+func isRequestBodyTooLarge(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "request body too large")
+}
+
 // getClientIPStd extracts client IP from standard http.Request.
-func getClientIPStd(r *http.Request) string {
-	// Check X-Forwarded-For header
+// When trustedProxies is nil or empty, proxy headers (X-Forwarded-For, X-Real-IP) are
+// not trusted and only RemoteAddr is used. When trustedProxies is set, proxy headers
+// are only used when the direct peer (RemoteAddr) is in the trusted list.
+func getClientIPStd(r *http.Request, trustedProxies []string) string {
+	directIP := remoteIPFromAddr(r.RemoteAddr)
+	if len(trustedProxies) == 0 || !isIPInTrustedList(directIP, trustedProxies) {
+		return directIP
+	}
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		ips := strings.Split(xff, ",")
 		if len(ips) > 0 {
 			return strings.TrimSpace(ips[0])
 		}
 	}
-
-	// Check X-Real-IP header
 	if xri := r.Header.Get("X-Real-IP"); xri != "" {
 		return strings.TrimSpace(xri)
 	}
+	return directIP
+}
 
-	// Fall back to RemoteAddr
-	addr := r.RemoteAddr
-	if idx := strings.LastIndex(addr, ":"); idx != -1 {
-		return addr[:idx]
+// getClientIPFiber extracts client IP from Fiber context with the same trusted-proxy
+// semantics as getClientIPStd. When trustedProxies is empty, only the direct peer is used.
+func getClientIPFiber(c *fiber.Ctx, trustedProxies []string) string {
+	addr := c.Context().RemoteAddr().String()
+	directIP := remoteIPFromAddr(addr)
+	if len(trustedProxies) == 0 || !isIPInTrustedList(directIP, trustedProxies) {
+		return directIP
 	}
-	return addr
+	if xff := c.Get("X-Forwarded-For"); xff != "" {
+		ips := strings.Split(xff, ",")
+		if len(ips) > 0 {
+			return strings.TrimSpace(ips[0])
+		}
+	}
+	if xri := c.Get("X-Real-IP"); xri != "" {
+		return strings.TrimSpace(xri)
+	}
+	return directIP
 }
 
 // RegisterLevelEndpoint registers the log level endpoint on a standard ServeMux.

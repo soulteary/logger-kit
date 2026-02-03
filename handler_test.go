@@ -167,6 +167,30 @@ func TestLevelHandler_MethodNotAllowed(t *testing.T) {
 	assert.Equal(t, http.StatusMethodNotAllowed, rec.Code)
 }
 
+func TestLevelHandler_BodyTooLarge(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(Config{
+		Level:  InfoLevel,
+		Output: &buf,
+		Format: FormatJSON,
+	})
+
+	handler := LevelHandler(LevelHandlerConfig{
+		Logger:       logger,
+		MaxBodyBytes: 10,
+	})
+
+	body := `{"level": "debug"}` // 18 bytes
+	req := httptest.NewRequest(http.MethodPut, "/log/level", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	assert.Equal(t, InfoLevel, logger.GetLevel())
+}
+
 func TestLevelHandler_AllowedIPs(t *testing.T) {
 	handler := LevelHandler(LevelHandlerConfig{
 		AllowedIPs: []string{"192.168.1.1"},
@@ -406,34 +430,46 @@ func TestRegisterLevelEndpointFiber(t *testing.T) {
 
 func TestGetClientIPStd(t *testing.T) {
 	tests := []struct {
-		name       string
-		headers    map[string]string
-		remoteAddr string
-		expected   string
+		name           string
+		headers        map[string]string
+		remoteAddr     string
+		trustedProxies []string
+		expected       string
 	}{
 		{
-			name:       "X-Forwarded-For",
-			headers:    map[string]string{"X-Forwarded-For": "192.168.1.1, 10.0.0.1"},
-			remoteAddr: "127.0.0.1:1234",
-			expected:   "192.168.1.1",
+			name:           "no trusted proxies ignores X-Forwarded-For",
+			headers:        map[string]string{"X-Forwarded-For": "192.168.1.1, 10.0.0.1"},
+			remoteAddr:     "127.0.0.1:1234",
+			trustedProxies: nil,
+			expected:       "127.0.0.1",
 		},
 		{
-			name:       "X-Real-IP",
-			headers:    map[string]string{"X-Real-IP": "192.168.1.2"},
-			remoteAddr: "127.0.0.1:1234",
-			expected:   "192.168.1.2",
+			name:           "with trusted proxy uses X-Forwarded-For",
+			headers:        map[string]string{"X-Forwarded-For": "192.168.1.1, 10.0.0.1"},
+			remoteAddr:     "127.0.0.1:1234",
+			trustedProxies: []string{"127.0.0.1"},
+			expected:       "192.168.1.1",
 		},
 		{
-			name:       "RemoteAddr",
-			headers:    map[string]string{},
-			remoteAddr: "192.168.1.3:1234",
-			expected:   "192.168.1.3",
+			name:           "with trusted proxy uses X-Real-IP",
+			headers:        map[string]string{"X-Real-IP": "192.168.1.2"},
+			remoteAddr:     "127.0.0.1:1234",
+			trustedProxies: []string{"127.0.0.1"},
+			expected:       "192.168.1.2",
 		},
 		{
-			name:       "RemoteAddr without port",
-			headers:    map[string]string{},
-			remoteAddr: "192.168.1.4",
-			expected:   "192.168.1.4",
+			name:           "RemoteAddr",
+			headers:        map[string]string{},
+			remoteAddr:     "192.168.1.3:1234",
+			trustedProxies: nil,
+			expected:       "192.168.1.3",
+		},
+		{
+			name:           "RemoteAddr without port",
+			headers:        map[string]string{},
+			remoteAddr:     "192.168.1.4",
+			trustedProxies: nil,
+			expected:       "192.168.1.4",
 		},
 	}
 
@@ -445,7 +481,7 @@ func TestGetClientIPStd(t *testing.T) {
 			}
 			req.RemoteAddr = tt.remoteAddr
 
-			ip := getClientIPStd(req)
+			ip := getClientIPStd(req, tt.trustedProxies)
 			assert.Equal(t, tt.expected, ip)
 		})
 	}
@@ -483,13 +519,31 @@ func TestLevelHandlerFiber_DefaultLogger(t *testing.T) {
 	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
-func TestLevelHandler_XForwardedForIP(t *testing.T) {
+func TestLevelHandler_XForwardedForIP_Untrusted(t *testing.T) {
+	// Without TrustedProxies, X-Forwarded-For is ignored; client is RemoteAddr.
 	handler := LevelHandler(LevelHandlerConfig{
 		AllowedIPs: []string{"192.168.1.100"},
 	})
 
-	// Request from allowed IP via X-Forwarded-For
 	req := httptest.NewRequest(http.MethodGet, "/log/level", nil)
+	req.RemoteAddr = "10.0.0.5:1234"
+	req.Header.Set("X-Forwarded-For", "192.168.1.100, 10.0.0.1")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusForbidden, rec.Code)
+}
+
+func TestLevelHandler_XForwardedForIP_Trusted(t *testing.T) {
+	// With TrustedProxies containing the direct peer, X-Forwarded-For is used.
+	handler := LevelHandler(LevelHandlerConfig{
+		AllowedIPs:     []string{"192.168.1.100"},
+		TrustedProxies: []string{"127.0.0.1"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/log/level", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-Forwarded-For", "192.168.1.100, 10.0.0.1")
 	rec := httptest.NewRecorder()
 
@@ -498,13 +552,14 @@ func TestLevelHandler_XForwardedForIP(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
-func TestLevelHandler_XRealIP(t *testing.T) {
+func TestLevelHandler_XRealIP_Trusted(t *testing.T) {
 	handler := LevelHandler(LevelHandlerConfig{
-		AllowedIPs: []string{"192.168.1.200"},
+		AllowedIPs:     []string{"192.168.1.200"},
+		TrustedProxies: []string{"127.0.0.1"},
 	})
 
-	// Request from allowed IP via X-Real-IP
 	req := httptest.NewRequest(http.MethodGet, "/log/level", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
 	req.Header.Set("X-Real-IP", "192.168.1.200")
 	rec := httptest.NewRecorder()
 

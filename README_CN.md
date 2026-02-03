@@ -18,6 +18,12 @@
 - **中间件**：支持 net/http 和 Fiber 的请求日志中间件
 - **格式选项**：JSON 和人类可读的控制台输出
 
+## 安全说明
+
+- **Level 端点**：生产环境中必须设置 `AllowedIPs` 或 `RequireAuth`，且不要将端点暴露到公网。若部署在反向代理后，请设置 `TrustedProxies` 为代理 IP。
+- **Query/Body 日志**：默认会记录 URL 查询参数；可通过 `SensitiveQueryParams`（默认会脱敏 password、token 等常见参数）避免泄露敏感信息。敏感接口请勿开启 `IncludeBody`。
+- 详见 [SECURITY.md](SECURITY.md) 及漏洞报告方式。
+
 ## 安装
 
 ```bash
@@ -132,6 +138,8 @@ func main() {
 // GET /log/level - 获取当前日志级别
 // PUT /log/level - 设置日志级别（请求体：{"level": "debug"}）
 ```
+
+**安全（Level 端点）：** 生产环境必须设置 `AllowedIPs` 或 `RequireAuth`，仅允许受信任的调用方修改日志级别；不要将端点暴露到公网。若在反向代理后，请设置 `TrustedProxies` 为代理 IP，以便正确识别客户端 IP。详见 [SECURITY.md](SECURITY.md)。
 
 ### 请求日志中间件
 
@@ -317,22 +325,26 @@ type Config struct {
 
 ```go
 type MiddlewareConfig struct {
-    Logger            *Logger       // 日志器实例
-    SkipPaths         []string      // 跳过日志记录的路径
-    SkipFunc          func(*http.Request) bool // 自定义跳过函数
-    LogLevel          Level         // 2xx 响应的日志级别
-    WarnLevel         Level         // 4xx 响应的日志级别
-    ErrorLevel        Level         // 5xx 响应的日志级别
-    IncludeRequestID  bool          // 生成/传播请求 ID
-    RequestIDHeader   string        // 请求 ID 的头名称
-    IncludeLatency    bool          // 记录请求持续时间
-    IncludeHeaders    bool          // 记录请求头
-    SensitiveHeaders  []string      // 需要脱敏的头
-    IncludeQuery      bool          // 记录查询参数
-    IncludeBody       bool          // 记录请求体
-    MaxBodySize       int           // 记录的最大请求体大小
+    Logger                *Logger       // 日志器实例
+    SkipPaths             []string      // 跳过日志记录的路径
+    SkipFunc              func(*http.Request) bool // 自定义跳过函数
+    LogLevel              Level         // 2xx 响应的日志级别
+    WarnLevel             Level         // 4xx 响应的日志级别
+    ErrorLevel            Level         // 5xx 响应的日志级别
+    IncludeRequestID     bool          // 生成/传播请求 ID
+    RequestIDHeader      string        // 请求 ID 的头名称
+    IncludeLatency       bool          // 记录请求持续时间
+    IncludeHeaders       bool          // 记录请求头
+    SensitiveHeaders     []string      // 需要脱敏的头
+    IncludeQuery         bool          // 记录查询参数
+    SensitiveQueryParams []string      // 需脱敏的 query 键（nil=不脱敏；空切片=使用默认列表）
+    IncludeBody          bool          // 记录请求体（仅 Fiber 支持 body；慎用）
+    MaxBodySize          int           // 记录的最大请求体大小
+    TrustedProxies       []string      // 代理 IP/CIDR，用于从 X-Forwarded-For 解析客户端 IP
 }
 ```
+
+**敏感数据：** 默认会记录 query；URL 中常含 token、密码等。可通过 `SensitiveQueryParams`（默认会脱敏 password、token、code、secret、api_key 等）在日志中脱敏；设为 `nil` 可关闭 query 脱敏。`IncludeBody` 默认关闭，开启可能记录凭证，仅建议在非敏感路径使用或先脱敏再记录。
 
 ## 测试
 

@@ -3,6 +3,7 @@ package logger
 import (
 	"bytes"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -253,6 +254,36 @@ func TestMiddleware_IncludeQuery(t *testing.T) {
 	assert.Contains(t, output, "baz=qux")
 }
 
+func TestMiddleware_SensitiveQueryParams(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(Config{
+		Level:  InfoLevel,
+		Output: &buf,
+		Format: FormatJSON,
+	})
+
+	middleware := Middleware(MiddlewareConfig{
+		Logger:               logger,
+		IncludeQuery:         true,
+		SensitiveQueryParams: []string{}, // use default list
+	})
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/test?foo=bar&password=secret&token=xyz", nil)
+	rec := httptest.NewRecorder()
+	middleware(handler).ServeHTTP(rec, req)
+
+	output := buf.String()
+	assert.Contains(t, output, "foo=bar")
+	assert.Contains(t, output, "password=***")
+	assert.Contains(t, output, "token=***")
+	assert.NotContains(t, output, "secret")
+	assert.NotContains(t, output, "xyz")
+}
+
 func TestMiddleware_IncludeHeaders(t *testing.T) {
 	var buf bytes.Buffer
 	logger := New(Config{
@@ -281,6 +312,63 @@ func TestMiddleware_IncludeHeaders(t *testing.T) {
 	assert.Contains(t, output, "custom-value")
 	assert.Contains(t, output, "[REDACTED]")
 	assert.NotContains(t, output, "secret-token")
+}
+
+func TestMiddleware_IncludeBody(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(Config{
+		Level:  InfoLevel,
+		Output: &buf,
+		Format: FormatJSON,
+	})
+
+	middleware := Middleware(MiddlewareConfig{
+		Logger:      logger,
+		IncludeBody: true,
+		MaxBodySize: 100,
+	})
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		assert.Equal(t, `{"key":"value"}`, string(body))
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(`{"key":"value"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	middleware(handler).ServeHTTP(rec, req)
+
+	output := buf.String()
+	assert.Contains(t, output, "request_body")
+	assert.Contains(t, output, "key")
+}
+
+func TestMiddleware_IncludeBody_Truncated(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(Config{
+		Level:  InfoLevel,
+		Output: &buf,
+		Format: FormatJSON,
+	})
+
+	middleware := Middleware(MiddlewareConfig{
+		Logger:      logger,
+		IncludeBody: true,
+		MaxBodySize: 10,
+	})
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		assert.Equal(t, `{"key":"this is a very long value that exceeds the max body size"}`, string(body))
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodPost, "/test", strings.NewReader(`{"key":"this is a very long value that exceeds the max body size"}`))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+	middleware(handler).ServeHTTP(rec, req)
+
+	output := buf.String()
+	assert.Contains(t, output, "[truncated]")
 }
 
 func TestMiddleware_CustomFields(t *testing.T) {

@@ -186,12 +186,37 @@ func TestLevelManager_OnChange(t *testing.T) {
 	assert.Equal(t, InfoLevel, oldLevel)
 	assert.Equal(t, DebugLevel, newLevel)
 
-	// Unregister and verify callback is not called
+	// Unregister and verify callback is not called on next SetLevel
 	unregister()
 	called = false
 	lm.SetLevel(WarnLevel)
-	// Note: Due to the simple unregister implementation, this may still be called
-	// In a production implementation, we'd use a more robust unregister mechanism
+	assert.False(t, called)
+}
+
+func TestLevelManager_OnChange_UnregisterFirstOfTwo(t *testing.T) {
+	lm := NewLevelManager(InfoLevel)
+
+	firstCalled := false
+	secondCalled := false
+
+	unregisterFirst := lm.OnChange(func(_, _ Level) {
+		firstCalled = true
+	})
+	lm.OnChange(func(_, _ Level) {
+		secondCalled = true
+	})
+
+	lm.SetLevel(DebugLevel)
+	require.True(t, firstCalled)
+	require.True(t, secondCalled)
+
+	unregisterFirst()
+	firstCalled = false
+	secondCalled = false
+	lm.SetLevel(WarnLevel)
+
+	assert.False(t, firstCalled, "unregistered callback should not be called")
+	assert.True(t, secondCalled, "remaining callback should still be called")
 }
 
 func TestLevelManager_NoChangeNoCallback(t *testing.T) {
