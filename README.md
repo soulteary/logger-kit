@@ -20,8 +20,8 @@ A structured logging toolkit for Go applications based on [zerolog](https://gith
 
 ## Security
 
-- **Level endpoint**: In production, always set `AllowedIPs` or `RequireAuth`; do not expose the endpoint publicly. When behind a reverse proxy, set `TrustedProxies` to your proxy IPs.
-- **Query/body logging**: Query parameters are logged by default; use `SensitiveQueryParams` (default list redacts common keys like `password`, `token`) to avoid leaking secrets. Avoid enabling `IncludeBody` on sensitive routes.
+- **Level endpoint**: In production, always set `AllowedIPs` or `RequireAuth`; do not expose the endpoint publicly. When behind a reverse proxy, set `TrustedProxies` to your proxy IPs. If `RequireAuth` is true, you must supply `AuthFunc`/`AuthFuncFiber` or requests will be rejected.
+- **Query/body logging**: Query parameters are logged by default; use `SensitiveQueryParams` (default list redacts common keys like `password`, `token`) to avoid leaking secrets. Avoid enabling `IncludeBody` on sensitive routes. Unparseable query strings are fully redacted.
 - See [SECURITY.md](SECURITY.md) for details and how to report vulnerabilities.
 
 ## Installation
@@ -139,7 +139,7 @@ func main() {
 // PUT /log/level - Set log level (body: {"level": "debug"})
 ```
 
-**Security (Level endpoint):** In production you must set `AllowedIPs` or `RequireAuth` so only trusted callers can change the log level. Do not expose this endpoint to the public. When behind a reverse proxy, set `TrustedProxies` to your proxy IPs so client IP checks work correctly. See [SECURITY.md](SECURITY.md) for details.
+**Security (Level endpoint):** In production you must set `AllowedIPs` or `RequireAuth` so only trusted callers can change the log level. Do not expose this endpoint to the public. When behind a reverse proxy, set `TrustedProxies` to your proxy IPs so client IP checks work correctly. If you enable `RequireAuth`, you must provide an `AuthFunc`/`AuthFuncFiber`. See [SECURITY.md](SECURITY.md) for details.
 
 ### Request Logging Middleware
 
@@ -344,7 +344,7 @@ type MiddlewareConfig struct {
 }
 ```
 
-**Sensitive data:** `IncludeQuery` is true by default; query strings often contain tokens or passwords. Use `SensitiveQueryParams` (default list includes `password`, `token`, `code`, `secret`, `api_key`, etc.) to redact those values in logs. Set to `nil` to disable query redaction. `IncludeBody` is false by default; enabling it can log credentials—use only for non-sensitive routes or redact before logging. For console format, the default field value formatter uses `%v`; avoid logging sensitive fields (see `logger.SensitiveFieldNames`) or set a custom `FormatFieldValue` to mask them.
+**Sensitive data:** `IncludeQuery` is true by default; query strings often contain tokens or passwords. Use `SensitiveQueryParams` (default list includes `password`, `token`, `code`, `secret`, `api_key`, etc.) to redact those values in logs. Set to `nil` to disable query redaction. Unparseable query strings are fully redacted. `IncludeBody` is false by default; enabling it can log credentials—use only for non-sensitive routes or redact before logging. For console format, the default field value formatter uses `%v`; avoid logging sensitive fields (see `logger.SensitiveFieldNames`) or set a custom `FormatFieldValue` to mask them.
 
 ## Testing
 

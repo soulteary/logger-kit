@@ -71,8 +71,12 @@ const DefaultLevelMaxBodyBytes = 4096
 // PUT/POST: Sets a new log level.
 func LevelHandler(cfg LevelHandlerConfig) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if cfg.RequireAuth && cfg.AuthFunc == nil {
+			http.Error(w, "AuthFunc is required when RequireAuth is enabled", http.StatusInternalServerError)
+			return
+		}
 		// Check authentication
-		if cfg.RequireAuth && cfg.AuthFunc != nil {
+		if cfg.RequireAuth {
 			if !cfg.AuthFunc(r) {
 				http.Error(w, "Unauthorized", http.StatusUnauthorized)
 				return
@@ -185,8 +189,13 @@ func LevelHandlerFunc(cfg LevelHandlerConfig) http.HandlerFunc {
 // PUT/POST: Sets a new log level.
 func LevelHandlerFiber(cfg LevelHandlerConfig) fiber.Handler {
 	return func(c *fiber.Ctx) error {
+		if cfg.RequireAuth && cfg.AuthFuncFiber == nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": "AuthFuncFiber is required when RequireAuth is enabled",
+			})
+		}
 		// Check authentication
-		if cfg.RequireAuth && cfg.AuthFuncFiber != nil {
+		if cfg.RequireAuth {
 			if !cfg.AuthFuncFiber(c) {
 				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
 					"error": "Unauthorized",

@@ -138,7 +138,7 @@ func redactQuery(rawQuery string, sensitiveKeys []string) string {
 	}
 	vals, err := url.ParseQuery(rawQuery)
 	if err != nil {
-		return rawQuery
+		return "[UNPARSEABLE QUERY REDACTED]"
 	}
 	var buf strings.Builder
 	for k, v := range vals {
