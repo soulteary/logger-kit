@@ -886,3 +886,31 @@ func TestFiberMiddleware_CustomRequestIDGenerator(t *testing.T) {
 
 	assert.Equal(t, "custom-generated-id", resp.Header.Get("X-Request-ID"))
 }
+
+// Test redactQuery with nil sensitiveKeys (no redaction) via Middleware.
+func TestMiddleware_Query_NilSensitiveParams(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(Config{
+		Level:  InfoLevel,
+		Output: &buf,
+		Format: FormatJSON,
+	})
+
+	middleware := Middleware(MiddlewareConfig{
+		Logger:               logger,
+		IncludeQuery:         true,
+		SensitiveQueryParams: nil, // disable redaction
+	})
+
+	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/test?token=secret123&foo=bar", nil)
+	rec := httptest.NewRecorder()
+	middleware(handler).ServeHTTP(rec, req)
+
+	output := buf.String()
+	assert.Contains(t, output, "token=secret123", "nil SensitiveQueryParams should not redact")
+	assert.Contains(t, output, "foo=bar")
+}

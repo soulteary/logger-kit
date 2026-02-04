@@ -136,7 +136,7 @@ func main() {
 }
 
 // GET /log/level - 获取当前日志级别
-// PUT /log/level - 设置日志级别（请求体：{"level": "debug"}）
+// PUT 或 POST /log/level - 设置日志级别（请求体：{"level": "debug"} 或查询参数：?level=debug）
 ```
 
 **安全（Level 端点）：** 生产环境必须设置 `AllowedIPs` 或 `RequireAuth`，仅允许受信任的调用方修改日志级别；不要将端点暴露到公网。若在反向代理后，请设置 `TrustedProxies` 为代理 IP，以便正确识别客户端 IP。详见 [SECURITY.md](SECURITY.md)。
@@ -316,6 +316,7 @@ type Config struct {
     TimeFormat           string    // 时间戳格式
     CallerEnabled        bool      // 包含调用者信息
     CallerSkipFrameCount int       // 调用者跳过帧数
+    StackTraceEnabled    bool      // 错误日志是否输出堆栈
     ServiceName          string    // 服务名称字段
     ServiceVersion       string    // 版本字段
 }
@@ -325,26 +326,44 @@ type Config struct {
 
 ```go
 type MiddlewareConfig struct {
-    Logger                *Logger       // 日志器实例
+    Logger                *Logger       // 日志器实例（nil=使用默认）
     SkipPaths             []string      // 跳过日志记录的路径
-    SkipFunc              func(*http.Request) bool // 自定义跳过函数
+    SkipFunc              func(*http.Request) bool // net/http 跳过条件
+    SkipFuncFiber         func(*fiber.Ctx) bool  // Fiber 跳过条件
     LogLevel              Level         // 2xx 响应的日志级别
     WarnLevel             Level         // 4xx 响应的日志级别
     ErrorLevel            Level         // 5xx 响应的日志级别
-    IncludeRequestID     bool          // 生成/传播请求 ID
-    RequestIDHeader      string        // 请求 ID 的头名称
-    IncludeLatency       bool          // 记录请求持续时间
-    IncludeHeaders       bool          // 记录请求头
-    SensitiveHeaders     []string      // 需要脱敏的头
-    IncludeQuery         bool          // 记录查询参数
-    SensitiveQueryParams []string      // 需脱敏的 query 键（nil=不脱敏；空切片=使用默认列表）
-    IncludeBody          bool          // 记录请求体（仅 Fiber 支持 body；慎用）
-    MaxBodySize          int           // 记录的最大请求体大小
-    TrustedProxies       []string      // 代理 IP/CIDR，用于从 X-Forwarded-For 解析客户端 IP
+    IncludeRequestID      bool          // 生成/传播请求 ID
+    RequestIDHeader       string        // 请求 ID 的头名称
+    GenerateRequestID     func() string // 自定义 ID 生成（nil=UUID）
+    IncludeLatency        bool          // 记录请求持续时间
+    IncludeHeaders        bool          // 记录请求头
+    SensitiveHeaders      []string      // 需要脱敏的头
+    IncludeQuery          bool          // 记录查询参数
+    SensitiveQueryParams  []string      // 需脱敏的 query 键（nil=不脱敏；空切片=使用默认列表）
+    IncludeBody           bool          // 记录请求体（慎用）
+    MaxBodySize           int           // 记录的最大请求体大小
+    CustomFields          func(*http.Request) map[string]interface{}   // 自定义字段（net/http）
+    CustomFieldsFiber     func(*fiber.Ctx) map[string]interface{}   // 自定义字段（Fiber）
+    TrustedProxies        []string      // 代理 IP/CIDR，用于从 X-Forwarded-For 解析客户端 IP
 }
 ```
 
 **敏感数据：** 默认会记录 query；URL 中常含 token、密码等。可通过 `SensitiveQueryParams`（默认会脱敏 password、token、code、secret、api_key 等）在日志中脱敏；设为 `nil` 可关闭 query 脱敏。`IncludeBody` 默认关闭，开启可能记录凭证，仅建议在非敏感路径使用或先脱敏再记录。
+
+### 日志级别端点配置
+
+```go
+type LevelHandlerConfig struct {
+    Logger          *Logger  // 要控制的日志器（nil=默认）
+    AllowedIPs      []string // IP 白名单（空=允许所有）
+    TrustedProxies  []string // 代理 IP/CIDR，用于解析 X-Forwarded-For
+    RequireAuth     bool     // 是否要求 AuthFunc/AuthFuncFiber
+    AuthFunc        func(*http.Request) bool  // net/http 鉴权
+    AuthFuncFiber   func(*fiber.Ctx) bool    // Fiber 鉴权
+    MaxBodyBytes    int64    // PUT/POST 最大 body（默认 4096）
+}
+```
 
 ## 测试
 

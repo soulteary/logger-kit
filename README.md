@@ -136,7 +136,7 @@ func main() {
 }
 
 // GET /log/level - Get current log level
-// PUT /log/level - Set log level (body: {"level": "debug"})
+// PUT or POST /log/level - Set log level (body: {"level": "debug"} or query: ?level=debug)
 ```
 
 **Security (Level endpoint):** In production you must set `AllowedIPs` or `RequireAuth` so only trusted callers can change the log level. Do not expose this endpoint to the public. When behind a reverse proxy, set `TrustedProxies` to your proxy IPs so client IP checks work correctly. If you enable `RequireAuth`, you must provide an `AuthFunc`/`AuthFuncFiber`. See [SECURITY.md](SECURITY.md) for details.
@@ -316,6 +316,7 @@ type Config struct {
     TimeFormat           string    // Timestamp format
     CallerEnabled        bool      // Include caller information
     CallerSkipFrameCount int       // Skip frames for caller
+    StackTraceEnabled    bool      // Stack trace for error logs
     ServiceName          string    // Service name field
     ServiceVersion       string    // Version field
 }
@@ -325,26 +326,44 @@ type Config struct {
 
 ```go
 type MiddlewareConfig struct {
-    Logger                *Logger       // Logger instance
+    Logger                *Logger       // Logger instance (nil = default)
     SkipPaths             []string      // Paths to skip logging
-    SkipFunc              func(*http.Request) bool // Custom skip function
+    SkipFunc              func(*http.Request) bool // Skip for net/http
+    SkipFuncFiber         func(*fiber.Ctx) bool   // Skip for Fiber
     LogLevel              Level         // Level for 2xx responses
     WarnLevel             Level         // Level for 4xx responses
     ErrorLevel            Level         // Level for 5xx responses
-    IncludeRequestID     bool          // Generate/propagate request ID
-    RequestIDHeader      string        // Header name for request ID
-    IncludeLatency       bool          // Log request duration
-    IncludeHeaders       bool          // Log request headers
-    SensitiveHeaders     []string      // Headers to redact
-    IncludeQuery         bool          // Log query parameters
-    SensitiveQueryParams []string      // Query keys to redact (nil = no redaction; empty = use default list)
-    IncludeBody          bool          // Log request body (Fiber only for body; use with caution)
-    MaxBodySize          int           // Max body size to log
-    TrustedProxies       []string      // Proxy IPs/CIDRs for client IP from X-Forwarded-For
+    IncludeRequestID      bool          // Generate/propagate request ID
+    RequestIDHeader       string        // Header name for request ID
+    GenerateRequestID     func() string // Custom ID generator (nil = UUID)
+    IncludeLatency        bool          // Log request duration
+    IncludeHeaders        bool          // Log request headers
+    SensitiveHeaders      []string      // Headers to redact
+    IncludeQuery          bool          // Log query parameters
+    SensitiveQueryParams  []string      // Query keys to redact (nil = no redaction; empty = use default list)
+    IncludeBody           bool          // Log request body (use with caution)
+    MaxBodySize           int           // Max body size to log
+    CustomFields          func(*http.Request) map[string]interface{}     // Extra fields (net/http)
+    CustomFieldsFiber     func(*fiber.Ctx) map[string]interface{}        // Extra fields (Fiber)
+    TrustedProxies        []string      // Proxy IPs/CIDRs for client IP from X-Forwarded-For
 }
 ```
 
 **Sensitive data:** `IncludeQuery` is true by default; query strings often contain tokens or passwords. Use `SensitiveQueryParams` (default list includes `password`, `token`, `code`, `secret`, `api_key`, etc.) to redact those values in logs. Set to `nil` to disable query redaction. Unparseable query strings are fully redacted. `IncludeBody` is false by default; enabling it can log credentials—use only for non-sensitive routes or redact before logging. For console format, the default field value formatter uses `%v`; avoid logging sensitive fields (see `logger.SensitiveFieldNames`) or set a custom `FormatFieldValue` to mask them.
+
+### Level Endpoint Configuration
+
+```go
+type LevelHandlerConfig struct {
+    Logger          *Logger  // Logger to control (nil = default)
+    AllowedIPs      []string // IP allowlist (empty = allow all)
+    TrustedProxies  []string // Proxy IPs/CIDRs for X-Forwarded-For
+    RequireAuth     bool     // Require AuthFunc/AuthFuncFiber
+    AuthFunc        func(*http.Request) bool  // Auth for net/http
+    AuthFuncFiber   func(*fiber.Ctx) bool     // Auth for Fiber
+    MaxBodyBytes    int64    // Max body for PUT/POST (default 4096)
+}
+```
 
 ## Testing
 

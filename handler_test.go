@@ -567,3 +567,136 @@ func TestLevelHandler_XRealIP_Trusted(t *testing.T) {
 
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
+
+func TestLevelHandler_RequireAuth_NoAuthFunc(t *testing.T) {
+	handler := LevelHandler(LevelHandlerConfig{
+		RequireAuth: true,
+		AuthFunc:    nil,
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/log/level", nil)
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusInternalServerError, rec.Code)
+	assert.Contains(t, rec.Body.String(), "AuthFunc is required")
+}
+
+func TestLevelHandlerFiber_RequireAuth_NoAuthFuncFiber(t *testing.T) {
+	app := fiber.New()
+	app.Get("/log/level", LevelHandlerFiber(LevelHandlerConfig{
+		RequireAuth:   true,
+		AuthFuncFiber: nil,
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/log/level", nil)
+	resp, err := app.Test(req)
+	require.NoError(t, err)
+
+	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
+}
+
+func TestLevelHandlerFiber_BodyTooLarge(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(Config{
+		Level:  InfoLevel,
+		Output: &buf,
+		Format: FormatJSON,
+	})
+
+	app := fiber.New()
+	app.Put("/log/level", LevelHandlerFiber(LevelHandlerConfig{
+		Logger:       logger,
+		MaxBodyBytes: 5,
+	}))
+
+	body := `{"level": "debug"}` // > 5 bytes
+	req := httptest.NewRequest(http.MethodPut, "/log/level", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := app.Test(req)
+	require.NoError(t, err)
+
+	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
+}
+
+func TestLevelHandler_PUT_InvalidJSON_LevelInQuery(t *testing.T) {
+	var buf bytes.Buffer
+	logger := New(Config{
+		Level:  InfoLevel,
+		Output: &buf,
+		Format: FormatJSON,
+	})
+
+	handler := LevelHandler(LevelHandlerConfig{Logger: logger})
+
+	req := httptest.NewRequest(http.MethodPut, "/log/level?level=warn", strings.NewReader("invalid json"))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+	assert.Equal(t, WarnLevel, logger.GetLevel())
+}
+
+// Test remoteIPFromAddr and isIPInTrustedList via LevelHandler (TrustedProxies with CIDR).
+func TestLevelHandler_TrustedProxies_CIDR(t *testing.T) {
+	handler := LevelHandler(LevelHandlerConfig{
+		AllowedIPs:     []string{"192.168.1.100"},
+		TrustedProxies: []string{"127.0.0.0/24"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/log/level", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	req.Header.Set("X-Forwarded-For", "192.168.1.100, 10.0.0.1")
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestLevelHandler_TrustedProxies_InvalidCIDR(t *testing.T) {
+	// Invalid CIDR in list should be skipped; direct peer 127.0.0.1 not in list, so no proxy trust
+	handler := LevelHandler(LevelHandlerConfig{
+		AllowedIPs:     []string{"127.0.0.1"},
+		TrustedProxies: []string{"invalid-cidr", "127.0.0.1"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/log/level", nil)
+	req.RemoteAddr = "127.0.0.1:1234"
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestLevelHandler_RemoteAddr_IPv6(t *testing.T) {
+	handler := LevelHandler(LevelHandlerConfig{
+		AllowedIPs: []string{"::1"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/log/level", nil)
+	req.RemoteAddr = "[::1]:1234"
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+func TestLevelHandler_RemoteAddr_NoPort(t *testing.T) {
+	handler := LevelHandler(LevelHandlerConfig{
+		AllowedIPs: []string{"192.168.1.50"},
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/log/level", nil)
+	req.RemoteAddr = "192.168.1.50"
+	rec := httptest.NewRecorder()
+
+	handler.ServeHTTP(rec, req)
+
+	assert.Equal(t, http.StatusOK, rec.Code)
+}

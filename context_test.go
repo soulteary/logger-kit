@@ -31,6 +31,13 @@ func TestLoggerFromContext_NotFound(t *testing.T) {
 	assert.Equal(t, defaultLogger, logger)
 }
 
+func TestLoggerFromContext_WrongTypeInContext(t *testing.T) {
+	// Context has a value for logger key but it's not *Logger (e.g. string)
+	ctx := context.WithValue(context.Background(), loggerContextKey, "not-a-logger")
+	logger := LoggerFromContext(ctx)
+	assert.Equal(t, defaultLogger, logger)
+}
+
 func TestLoggerFromContext_Nil(t *testing.T) {
 	//nolint:staticcheck // SA1012: intentionally testing nil context handling
 	logger := LoggerFromContext(nil)

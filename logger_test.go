@@ -214,6 +214,15 @@ func TestLogger_Zerolog(t *testing.T) {
 	assert.NotNil(t, zl)
 }
 
+func TestLogger_ZerologPtr(t *testing.T) {
+	logger := NewDefault()
+	zlp := logger.ZerologPtr()
+	require.NotNil(t, zlp)
+	zlp.Info().Msg("test")
+	// ZerologPtr returns pointer for libs that need *zerolog.Logger
+	assert.Equal(t, logger.Zerolog(), *zlp)
+}
+
 func TestLogger_LevelManager(t *testing.T) {
 	logger := NewDefault()
 	lm := logger.LevelManager()
