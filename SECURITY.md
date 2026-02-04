@@ -9,12 +9,13 @@ If you believe you have found a security vulnerability, please report it private
 ### Log Level HTTP Endpoint
 
 - **Access control**: By default, the Level endpoint has no authentication and no IP restriction. **In production you must** set either `AllowedIPs` or `RequireAuth` (or both). Do not expose the Level endpoint to the public or untrusted networks; otherwise anyone can change the log level (e.g. to trace/debug, causing information disclosure and log flooding, or to disabled, reducing observability).
+- **RequireAuth configuration**: When `RequireAuth` is true you must provide an `AuthFunc`/`AuthFuncFiber`. Requests will be rejected if authentication is enabled without a function.
 - **Trusted proxies**: When the app is behind a reverse proxy, set `TrustedProxies` to the proxy IPs (or CIDRs). If `TrustedProxies` is not set, proxy headers (`X-Forwarded-For`, `X-Real-IP`) are not trusted and the client IP is taken from `RemoteAddr` only. This prevents IP spoofing; without it, an attacker could forge headers to bypass `AllowedIPs`.
 - **Request body limit**: The Level endpoint limits the request body size (default 4KB) to reduce DoS risk.
 
 ### Request Logging Middleware
 
-- **Query and body**: `IncludeQuery` is true by default. URL query strings often contain sensitive parameters (e.g. `token`, `password`, `code`). Use `SensitiveQueryParams` (default list includes common names) to redact values in logs. For request body, `IncludeBody` is false by default; enabling it may log passwords or tokens—use only for non-sensitive paths or with additional safeguards.
+- **Query and body**: `IncludeQuery` is true by default. URL query strings often contain sensitive parameters (e.g. `token`, `password`, `code`). Use `SensitiveQueryParams` (default list includes common names) to redact values in logs. Unparseable query strings are fully redacted. For request body, `IncludeBody` is false by default; enabling it may log passwords or tokens—use only for non-sensitive paths or with additional safeguards.
 - **Trusted proxies**: Set `TrustedProxies` when behind a reverse proxy so the logged "ip" field reflects the real client IP when appropriate.
 - **Headers**: Sensitive headers (e.g. Authorization, Cookie) are redacted by default when `IncludeHeaders` is true.
 
