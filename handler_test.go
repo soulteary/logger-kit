@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -373,7 +373,7 @@ func TestLevelHandlerFiber_RequireAuth(t *testing.T) {
 	app := fiber.New()
 	app.Get("/log/level", LevelHandlerFiber(LevelHandlerConfig{
 		RequireAuth: true,
-		AuthFuncFiber: func(c *fiber.Ctx) bool {
+		AuthFuncFiber: func(c fiber.Ctx) bool {
 			return c.Get("Authorization") == "Bearer valid-token"
 		},
 	}))

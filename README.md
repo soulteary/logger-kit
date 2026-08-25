@@ -1,6 +1,6 @@
 # Logger Kit
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/logger-kit.svg)](https://pkg.go.dev/github.com/soulteary/logger-kit)
+[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/logger-kit/v2.svg)](https://pkg.go.dev/github.com/soulteary/logger-kit/v2)
 [![Go Report Card](.github/goreportcard.svg)](.github/goreportcard-report.md)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![codecov](https://codecov.io/gh/soulteary/logger-kit/graph/badge.svg)](https://codecov.io/gh/soulteary/logger-kit)
@@ -27,8 +27,10 @@ A structured logging toolkit for Go applications based on [zerolog](https://gith
 ## Installation
 
 ```bash
-go get github.com/soulteary/logger-kit
+go get github.com/soulteary/logger-kit/v2
 ```
+
+Version 2 uses Fiber v3 for all Fiber-specific APIs. Applications that still use Fiber v2 should remain on logger-kit v1. The net/http APIs keep the same behavior.
 
 ## Quick Start
 
@@ -38,7 +40,7 @@ go get github.com/soulteary/logger-kit
 package main
 
 import (
-    "github.com/soulteary/logger-kit"
+    "github.com/soulteary/logger-kit/v2"
 )
 
 func main() {
@@ -67,7 +69,7 @@ package main
 import (
     "os"
     
-    "github.com/soulteary/logger-kit"
+    "github.com/soulteary/logger-kit/v2"
 )
 
 func main() {
@@ -91,7 +93,7 @@ func main() {
 package main
 
 import (
-    "github.com/soulteary/logger-kit"
+    "github.com/soulteary/logger-kit/v2"
 )
 
 func main() {
@@ -119,7 +121,7 @@ package main
 import (
     "net/http"
     
-    "github.com/soulteary/logger-kit"
+    "github.com/soulteary/logger-kit/v2"
 )
 
 func main() {
@@ -151,7 +153,7 @@ package main
 import (
     "net/http"
     
-    "github.com/soulteary/logger-kit"
+    "github.com/soulteary/logger-kit/v2"
 )
 
 func main() {
@@ -186,8 +188,8 @@ func main() {
 package main
 
 import (
-    "github.com/gofiber/fiber/v2"
-    "github.com/soulteary/logger-kit"
+    "github.com/gofiber/fiber/v3"
+    "github.com/soulteary/logger-kit/v2"
 )
 
 func main() {
@@ -201,7 +203,7 @@ func main() {
         IncludeRequestID: true,
     }))
     
-    app.Get("/", func(c *fiber.Ctx) error {
+    app.Get("/", func(c fiber.Ctx) error {
         // Access logger from Fiber context
         l := logger.LoggerFromFiberCtx(c)
         l.Info().Msg("Processing request")
@@ -226,7 +228,7 @@ package main
 import (
     "context"
     
-    "github.com/soulteary/logger-kit"
+    "github.com/soulteary/logger-kit/v2"
 )
 
 func main() {
@@ -254,7 +256,7 @@ package main
 import (
     "os"
     
-    "github.com/soulteary/logger-kit"
+    "github.com/soulteary/logger-kit/v2"
 )
 
 func main() {
@@ -275,7 +277,7 @@ func main() {
 package main
 
 import (
-    "github.com/soulteary/logger-kit"
+    "github.com/soulteary/logger-kit/v2"
 )
 
 func main() {
@@ -329,7 +331,7 @@ type MiddlewareConfig struct {
     Logger                *Logger       // Logger instance (nil = default)
     SkipPaths             []string      // Paths to skip logging
     SkipFunc              func(*http.Request) bool // Skip for net/http
-    SkipFuncFiber         func(*fiber.Ctx) bool   // Skip for Fiber
+    SkipFuncFiber         func(fiber.Ctx) bool   // Skip for Fiber
     LogLevel              Level         // Level for 2xx responses
     WarnLevel             Level         // Level for 4xx responses
     ErrorLevel            Level         // Level for 5xx responses
@@ -344,7 +346,7 @@ type MiddlewareConfig struct {
     IncludeBody           bool          // Log request body (use with caution)
     MaxBodySize           int           // Max body size to log
     CustomFields          func(*http.Request) map[string]interface{}     // Extra fields (net/http)
-    CustomFieldsFiber     func(*fiber.Ctx) map[string]interface{}        // Extra fields (Fiber)
+    CustomFieldsFiber     func(fiber.Ctx) map[string]interface{}        // Extra fields (Fiber)
     TrustedProxies        []string      // Proxy IPs/CIDRs for client IP from X-Forwarded-For
 }
 ```
@@ -360,7 +362,7 @@ type LevelHandlerConfig struct {
     TrustedProxies  []string // Proxy IPs/CIDRs for X-Forwarded-For
     RequireAuth     bool     // Require AuthFunc/AuthFuncFiber
     AuthFunc        func(*http.Request) bool  // Auth for net/http
-    AuthFuncFiber   func(*fiber.Ctx) bool     // Auth for Fiber
+    AuthFuncFiber   func(fiber.Ctx) bool     // Auth for Fiber
     MaxBodyBytes    int64    // Max body for PUT/POST (default 4096)
 }
 ```
