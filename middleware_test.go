@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -428,7 +428,7 @@ func TestFiberMiddleware_Basic(t *testing.T) {
 
 	app := fiber.New()
 	app.Use(FiberMiddleware(MiddlewareConfig{Logger: logger}))
-	app.Get("/test", func(c *fiber.Ctx) error {
+	app.Get("/test", func(c fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusOK)
 	})
 
@@ -455,10 +455,10 @@ func TestFiberMiddleware_SkipPaths(t *testing.T) {
 		Logger:    logger,
 		SkipPaths: []string{"/health"},
 	}))
-	app.Get("/health", func(c *fiber.Ctx) error {
+	app.Get("/health", func(c fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusOK)
 	})
-	app.Get("/api", func(c *fiber.Ctx) error {
+	app.Get("/api", func(c fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusOK)
 	})
 
@@ -488,7 +488,7 @@ func TestFiberMiddleware_RequestID(t *testing.T) {
 		Logger:           logger,
 		IncludeRequestID: true,
 	}))
-	app.Get("/test", func(c *fiber.Ctx) error {
+	app.Get("/test", func(c fiber.Ctx) error {
 		id := RequestIDFromFiberCtx(c)
 		assert.NotEmpty(t, id)
 		return c.SendStatus(fiber.StatusOK)
@@ -523,7 +523,7 @@ func TestFiberMiddleware_LogLevelsByStatus(t *testing.T) {
 
 			app := fiber.New()
 			app.Use(FiberMiddleware(MiddlewareConfig{Logger: logger}))
-			app.Get("/test", func(c *fiber.Ctx) error {
+			app.Get("/test", func(c fiber.Ctx) error {
 				return c.SendStatus(tt.status)
 			})
 
@@ -550,7 +550,7 @@ func TestLoggerFromFiberCtx(t *testing.T) {
 
 	app := fiber.New()
 	app.Use(FiberMiddleware(MiddlewareConfig{Logger: expectedLogger}))
-	app.Get("/test", func(c *fiber.Ctx) error {
+	app.Get("/test", func(c fiber.Ctx) error {
 		logger := LoggerFromFiberCtx(c)
 		assert.Equal(t, expectedLogger, logger)
 		return c.SendStatus(fiber.StatusOK)
@@ -563,7 +563,7 @@ func TestLoggerFromFiberCtx(t *testing.T) {
 
 func TestLoggerFromFiberCtx_NotFound(t *testing.T) {
 	app := fiber.New()
-	app.Get("/test", func(c *fiber.Ctx) error {
+	app.Get("/test", func(c fiber.Ctx) error {
 		logger := LoggerFromFiberCtx(c)
 		assert.Equal(t, defaultLogger, logger)
 		return c.SendStatus(fiber.StatusOK)
@@ -577,7 +577,7 @@ func TestLoggerFromFiberCtx_NotFound(t *testing.T) {
 func TestRequestIDFromFiberCtx(t *testing.T) {
 	app := fiber.New()
 	app.Use(FiberMiddleware(MiddlewareConfig{IncludeRequestID: true}))
-	app.Get("/test", func(c *fiber.Ctx) error {
+	app.Get("/test", func(c fiber.Ctx) error {
 		id := RequestIDFromFiberCtx(c)
 		assert.NotEmpty(t, id)
 		return c.SendStatus(fiber.StatusOK)
@@ -590,7 +590,7 @@ func TestRequestIDFromFiberCtx(t *testing.T) {
 
 func TestRequestIDFromFiberCtx_NotFound(t *testing.T) {
 	app := fiber.New()
-	app.Get("/test", func(c *fiber.Ctx) error {
+	app.Get("/test", func(c fiber.Ctx) error {
 		id := RequestIDFromFiberCtx(c)
 		assert.Empty(t, id)
 		return c.SendStatus(fiber.StatusOK)
@@ -604,7 +604,7 @@ func TestRequestIDFromFiberCtx_NotFound(t *testing.T) {
 func TestCtxFiber(t *testing.T) {
 	app := fiber.New()
 	app.Use(FiberMiddleware(MiddlewareConfig{IncludeRequestID: true}))
-	app.Get("/test", func(c *fiber.Ctx) error {
+	app.Get("/test", func(c fiber.Ctx) error {
 		logger := CtxFiber(c)
 		assert.NotNil(t, logger)
 		return c.SendStatus(fiber.StatusOK)
@@ -645,11 +645,11 @@ func TestFiberMiddleware_SkipFunc(t *testing.T) {
 	app := fiber.New()
 	app.Use(FiberMiddleware(MiddlewareConfig{
 		Logger: logger,
-		SkipFuncFiber: func(c *fiber.Ctx) bool {
+		SkipFuncFiber: func(c fiber.Ctx) bool {
 			return c.Get("Skip-Logging") == "true"
 		},
 	}))
-	app.Get("/test", func(c *fiber.Ctx) error {
+	app.Get("/test", func(c fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusOK)
 	})
 
@@ -681,7 +681,7 @@ func TestFiberMiddleware_IncludeQuery(t *testing.T) {
 		Logger:       logger,
 		IncludeQuery: true,
 	}))
-	app.Get("/test", func(c *fiber.Ctx) error {
+	app.Get("/test", func(c fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusOK)
 	})
 
@@ -707,7 +707,7 @@ func TestFiberMiddleware_IncludeHeaders(t *testing.T) {
 		Logger:         logger,
 		IncludeHeaders: true,
 	}))
-	app.Get("/test", func(c *fiber.Ctx) error {
+	app.Get("/test", func(c fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusOK)
 	})
 
@@ -738,7 +738,7 @@ func TestFiberMiddleware_IncludeBody(t *testing.T) {
 		IncludeBody: true,
 		MaxBodySize: 100,
 	}))
-	app.Post("/test", func(c *fiber.Ctx) error {
+	app.Post("/test", func(c fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusOK)
 	})
 
@@ -767,7 +767,7 @@ func TestFiberMiddleware_IncludeBody_Truncated(t *testing.T) {
 		IncludeBody: true,
 		MaxBodySize: 10, // Very small limit
 	}))
-	app.Post("/test", func(c *fiber.Ctx) error {
+	app.Post("/test", func(c fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusOK)
 	})
 
@@ -792,13 +792,13 @@ func TestFiberMiddleware_CustomFields(t *testing.T) {
 	app := fiber.New()
 	app.Use(FiberMiddleware(MiddlewareConfig{
 		Logger: logger,
-		CustomFieldsFiber: func(c *fiber.Ctx) map[string]interface{} {
+		CustomFieldsFiber: func(c fiber.Ctx) map[string]interface{} {
 			return map[string]interface{}{
 				"custom_field": "custom_value",
 			}
 		},
 	}))
-	app.Get("/test", func(c *fiber.Ctx) error {
+	app.Get("/test", func(c fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusOK)
 	})
 
@@ -821,7 +821,7 @@ func TestFiberMiddleware_WithError(t *testing.T) {
 
 	app := fiber.New()
 	app.Use(FiberMiddleware(MiddlewareConfig{Logger: logger}))
-	app.Get("/test", func(c *fiber.Ctx) error {
+	app.Get("/test", func(c fiber.Ctx) error {
 		return fiber.NewError(fiber.StatusInternalServerError, "test error")
 	})
 
@@ -846,7 +846,7 @@ func TestFiberMiddleware_ExistingRequestID(t *testing.T) {
 		Logger:           logger,
 		IncludeRequestID: true,
 	}))
-	app.Get("/test", func(c *fiber.Ctx) error {
+	app.Get("/test", func(c fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusOK)
 	})
 
@@ -876,7 +876,7 @@ func TestFiberMiddleware_CustomRequestIDGenerator(t *testing.T) {
 			return "custom-generated-id"
 		},
 	}))
-	app.Get("/test", func(c *fiber.Ctx) error {
+	app.Get("/test", func(c fiber.Ctx) error {
 		return c.SendStatus(fiber.StatusOK)
 	})
 

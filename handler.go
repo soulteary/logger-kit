@@ -6,7 +6,7 @@ import (
 	"net/http"
 	"strings"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 )
 
 // LevelHandlerConfig configures the log level HTTP endpoint.
@@ -36,7 +36,7 @@ type LevelHandlerConfig struct {
 
 	// AuthFuncFiber is a custom authentication function for Fiber.
 	// Returns true if the request is authenticated.
-	AuthFuncFiber func(c *fiber.Ctx) bool
+	AuthFuncFiber func(c fiber.Ctx) bool
 
 	// MaxBodyBytes limits the request body size for PUT/POST (default 4096).
 	// Requests larger than this return 413 Request Entity Too Large.
@@ -188,7 +188,7 @@ func LevelHandlerFunc(cfg LevelHandlerConfig) http.HandlerFunc {
 // GET: Returns the current log level.
 // PUT/POST: Sets a new log level.
 func LevelHandlerFiber(cfg LevelHandlerConfig) fiber.Handler {
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		if cfg.RequireAuth && cfg.AuthFuncFiber == nil {
 			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
 				"error": "AuthFuncFiber is required when RequireAuth is enabled",
@@ -360,8 +360,8 @@ func getClientIPStd(r *http.Request, trustedProxies []string) string {
 
 // getClientIPFiber extracts client IP from Fiber context with the same trusted-proxy
 // semantics as getClientIPStd. When trustedProxies is empty, only the direct peer is used.
-func getClientIPFiber(c *fiber.Ctx, trustedProxies []string) string {
-	addr := c.Context().RemoteAddr().String()
+func getClientIPFiber(c fiber.Ctx, trustedProxies []string) string {
+	addr := c.RequestCtx().RemoteAddr().String()
 	directIP := remoteIPFromAddr(addr)
 	if len(trustedProxies) == 0 || !isIPInTrustedList(directIP, trustedProxies) {
 		return directIP

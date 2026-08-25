@@ -8,9 +8,16 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gofiber/fiber/v2"
+	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
 	"github.com/rs/zerolog"
+)
+
+type fiberContextKey uint8
+
+const (
+	fiberLoggerKey fiberContextKey = iota
+	fiberRequestIDKey
 )
 
 // MiddlewareConfig configures the logging middleware.
@@ -28,7 +35,7 @@ type MiddlewareConfig struct {
 	SkipFunc func(r *http.Request) bool
 
 	// SkipFuncFiber is a function to determine if logging should be skipped (Fiber).
-	SkipFuncFiber func(c *fiber.Ctx) bool
+	SkipFuncFiber func(c fiber.Ctx) bool
 
 	// LogLevel is the log level for successful requests (status < 400).
 	// Default: InfoLevel
@@ -88,7 +95,7 @@ type MiddlewareConfig struct {
 	CustomFields func(r *http.Request) map[string]interface{}
 
 	// CustomFieldsFiber adds custom fields to each log entry (Fiber).
-	CustomFieldsFiber func(c *fiber.Ctx) map[string]interface{}
+	CustomFieldsFiber func(c fiber.Ctx) map[string]interface{}
 
 	// TrustedProxies is a list of proxy IPs (or CIDRs). When non-empty, X-Forwarded-For
 	// and X-Real-IP are only used for the "ip" log field when the direct peer is in this list.
@@ -388,7 +395,7 @@ func FiberMiddleware(cfg MiddlewareConfig) fiber.Handler {
 		sensitiveQueryKeysFiber = defaultSensitiveQueryParams
 	}
 
-	return func(c *fiber.Ctx) error {
+	return func(c fiber.Ctx) error {
 		// Skip if path is in skip list
 		if skipPathMap[c.Path()] {
 			return c.Next()
@@ -419,11 +426,11 @@ func FiberMiddleware(cfg MiddlewareConfig) fiber.Handler {
 
 		// Store request ID in locals
 		if requestID != "" {
-			c.Locals("request_id", requestID)
+			c.Locals(fiberRequestIDKey, requestID)
 		}
 
 		// Store logger in locals
-		c.Locals("logger", cfg.Logger)
+		c.Locals(fiberLoggerKey, cfg.Logger)
 
 		// Process request
 		err := c.Next()
@@ -519,23 +526,23 @@ func FiberMiddleware(cfg MiddlewareConfig) fiber.Handler {
 }
 
 // LoggerFromFiberCtx extracts the logger from Fiber context.
-func LoggerFromFiberCtx(c *fiber.Ctx) *Logger {
-	if l, ok := c.Locals("logger").(*Logger); ok {
+func LoggerFromFiberCtx(c fiber.Ctx) *Logger {
+	if l, ok := c.Locals(fiberLoggerKey).(*Logger); ok {
 		return l
 	}
 	return defaultLogger
 }
 
 // RequestIDFromFiberCtx extracts the request ID from Fiber context.
-func RequestIDFromFiberCtx(c *fiber.Ctx) string {
-	if id, ok := c.Locals("request_id").(string); ok {
+func RequestIDFromFiberCtx(c fiber.Ctx) string {
+	if id, ok := c.Locals(fiberRequestIDKey).(string); ok {
 		return id
 	}
 	return ""
 }
 
 // CtxFiber returns a zerolog.Logger enriched with Fiber context values.
-func CtxFiber(c *fiber.Ctx) *zerolog.Logger {
+func CtxFiber(c fiber.Ctx) *zerolog.Logger {
 	l := LoggerFromFiberCtx(c)
 	logger := l.Zerolog()
 

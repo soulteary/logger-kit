@@ -1,7 +1,7 @@
 # Logger Kit
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/logger-kit.svg)](https://pkg.go.dev/github.com/soulteary/logger-kit)
-[![Go Report Card](https://goreportcard.com/badge/github.com/soulteary/logger-kit)](https://goreportcard.com/report/github.com/soulteary/logger-kit)
+[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/logger-kit/v2.svg)](https://pkg.go.dev/github.com/soulteary/logger-kit/v2)
+[![Go Report Card](https://goreportcard.com/badge/github.com/soulteary/logger-kit/v2)](https://goreportcard.com/report/github.com/soulteary/logger-kit/v2)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![codecov](https://codecov.io/gh/soulteary/logger-kit/graph/badge.svg)](https://codecov.io/gh/soulteary/logger-kit)
 
@@ -27,8 +27,10 @@
 ## 安装
 
 ```bash
-go get github.com/soulteary/logger-kit
+go get github.com/soulteary/logger-kit/v2
 ```
+
+v2 的所有 Fiber 专用 API 均基于 Fiber v3。仍使用 Fiber v2 的应用应继续使用 logger-kit v1；net/http API 的行为保持不变。
 
 ## 快速开始
 
@@ -38,7 +40,7 @@ go get github.com/soulteary/logger-kit
 package main
 
 import (
-    "github.com/soulteary/logger-kit"
+    "github.com/soulteary/logger-kit/v2"
 )
 
 func main() {
@@ -67,7 +69,7 @@ package main
 import (
     "os"
     
-    "github.com/soulteary/logger-kit"
+    "github.com/soulteary/logger-kit/v2"
 )
 
 func main() {
@@ -91,7 +93,7 @@ func main() {
 package main
 
 import (
-    "github.com/soulteary/logger-kit"
+    "github.com/soulteary/logger-kit/v2"
 )
 
 func main() {
@@ -119,7 +121,7 @@ package main
 import (
     "net/http"
     
-    "github.com/soulteary/logger-kit"
+    "github.com/soulteary/logger-kit/v2"
 )
 
 func main() {
@@ -151,7 +153,7 @@ package main
 import (
     "net/http"
     
-    "github.com/soulteary/logger-kit"
+    "github.com/soulteary/logger-kit/v2"
 )
 
 func main() {
@@ -186,8 +188,8 @@ func main() {
 package main
 
 import (
-    "github.com/gofiber/fiber/v2"
-    "github.com/soulteary/logger-kit"
+    "github.com/gofiber/fiber/v3"
+    "github.com/soulteary/logger-kit/v2"
 )
 
 func main() {
@@ -201,7 +203,7 @@ func main() {
         IncludeRequestID: true,
     }))
     
-    app.Get("/", func(c *fiber.Ctx) error {
+    app.Get("/", func(c fiber.Ctx) error {
         // 从 Fiber 上下文访问日志器
         l := logger.LoggerFromFiberCtx(c)
         l.Info().Msg("处理请求")
@@ -226,7 +228,7 @@ package main
 import (
     "context"
     
-    "github.com/soulteary/logger-kit"
+    "github.com/soulteary/logger-kit/v2"
 )
 
 func main() {
@@ -254,7 +256,7 @@ package main
 import (
     "os"
     
-    "github.com/soulteary/logger-kit"
+    "github.com/soulteary/logger-kit/v2"
 )
 
 func main() {
@@ -275,7 +277,7 @@ func main() {
 package main
 
 import (
-    "github.com/soulteary/logger-kit"
+    "github.com/soulteary/logger-kit/v2"
 )
 
 func main() {
@@ -329,7 +331,7 @@ type MiddlewareConfig struct {
     Logger                *Logger       // 日志器实例（nil=使用默认）
     SkipPaths             []string      // 跳过日志记录的路径
     SkipFunc              func(*http.Request) bool // net/http 跳过条件
-    SkipFuncFiber         func(*fiber.Ctx) bool  // Fiber 跳过条件
+    SkipFuncFiber         func(fiber.Ctx) bool  // Fiber 跳过条件
     LogLevel              Level         // 2xx 响应的日志级别
     WarnLevel             Level         // 4xx 响应的日志级别
     ErrorLevel            Level         // 5xx 响应的日志级别
@@ -344,7 +346,7 @@ type MiddlewareConfig struct {
     IncludeBody           bool          // 记录请求体（慎用）
     MaxBodySize           int           // 记录的最大请求体大小
     CustomFields          func(*http.Request) map[string]interface{}   // 自定义字段（net/http）
-    CustomFieldsFiber     func(*fiber.Ctx) map[string]interface{}   // 自定义字段（Fiber）
+    CustomFieldsFiber     func(fiber.Ctx) map[string]interface{}   // 自定义字段（Fiber）
     TrustedProxies        []string      // 代理 IP/CIDR，用于从 X-Forwarded-For 解析客户端 IP
 }
 ```
@@ -360,7 +362,7 @@ type LevelHandlerConfig struct {
     TrustedProxies  []string // 代理 IP/CIDR，用于解析 X-Forwarded-For
     RequireAuth     bool     // 是否要求 AuthFunc/AuthFuncFiber
     AuthFunc        func(*http.Request) bool  // net/http 鉴权
-    AuthFuncFiber   func(*fiber.Ctx) bool    // Fiber 鉴权
+    AuthFuncFiber   func(fiber.Ctx) bool    // Fiber 鉴权
     MaxBodyBytes    int64    // PUT/POST 最大 body（默认 4096）
 }
 ```
