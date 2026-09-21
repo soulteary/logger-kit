@@ -43,7 +43,7 @@
 
 ## 安全说明
 
-- **Level 端点**：生产环境中必须设置 `AllowedIPs` 或 `RequireAuth`，且不要将端点暴露到公网。若部署在反向代理后，请设置 `TrustedProxies` 为代理 IP。
+- **Level 端点**：生产环境中必须设置 `AllowedIPs` 或 `RequireAuth`，且不要将端点暴露到公网。若部署在反向代理后，请设置 `TrustedProxies` 为代理 IP。启用 `RequireAuth` 时必须提供 `AuthFunc`——net/http 用 `logger.LevelHandlerConfig.AuthFunc`，Fiber 用 `fiberadapter.LevelHandlerConfig.AuthFunc`，否则请求会被拒绝。
 - **Query/Body 日志**：默认会记录 URL 查询参数；可通过 `SensitiveQueryParams`（默认会脱敏 password、token 等常见参数）避免泄露敏感信息，`DisableQueryRedaction` 可关闭脱敏。开启请求体记录时，`SensitiveBodyFields` / `DisableBodyRedaction` 提供同样的控制。敏感接口请勿开启 `IncludeBody`。
 - 详见 [SECURITY.md](SECURITY.md) 及漏洞报告方式。
 
@@ -51,10 +51,13 @@
 
 - **Go 1.27+**（`go.mod` 声明 `go 1.27.0`）
 - `github.com/rs/zerolog`
-- Fiber 中间件与处理器需要 `github.com/gofiber/fiber/v3` v3.4.0+
+- `github.com/gofiber/fiber/v3` v3.4.0+ —— **仅在你导入 `fiberadapter` 时需要**
 
 v2 模块线面向 Fiber v3。仍在 Fiber v2 上的应用请继续使用
 `github.com/soulteary/logger-kit` v1。
+
+自 v2.4.0 起根包不再导入 Fiber，因此 net/http、Echo、Gin 或 chi 服务既不会链接它，
+也不会下载它。
 
 ## 安装
 
@@ -173,7 +176,7 @@ func main() {
 // PUT 或 POST /log/level - 设置日志级别（请求体：{"level": "debug"} 或查询参数：?level=debug）
 ```
 
-**安全（Level 端点）：** 生产环境必须设置 `AllowedIPs` 或 `RequireAuth`，仅允许受信任的调用方修改日志级别；不要将端点暴露到公网。若在反向代理后，请设置 `TrustedProxies` 为代理 IP，以便正确识别客户端 IP。详见 [SECURITY.md](SECURITY.md)。
+**安全（Level 端点）：** 生产环境必须设置 `AllowedIPs` 或 `RequireAuth`，仅允许受信任的调用方修改日志级别；不要将端点暴露到公网。若在反向代理后，请设置 `TrustedProxies` 为代理 IP，以便正确识别客户端 IP。启用 `RequireAuth` 时必须提供 `AuthFunc`（Fiber 侧为 `fiberadapter.LevelHandlerConfig.AuthFunc`）。详见 [SECURITY.md](SECURITY.md)。
 
 ### 请求日志中间件
 
@@ -368,7 +371,6 @@ type MiddlewareConfig struct {
     Logger                *Logger       // 日志器实例（nil=使用默认）
     SkipPaths             []string      // 跳过日志记录的路径
     SkipFunc              func(*http.Request) bool // net/http 跳过条件
-    SkipFuncFiber         func(fiber.Ctx) bool  // Fiber 跳过条件
     LogLevel              Level         // 2xx 响应的日志级别
     WarnLevel             Level         // 4xx 响应的日志级别
     ErrorLevel            Level         // 5xx 响应的日志级别
@@ -386,10 +388,12 @@ type MiddlewareConfig struct {
     DisableBodyRedaction  bool          // 原样记录请求体
     MaxBodySize           int           // 记录的最大请求体大小
     CustomFields          func(*http.Request) map[string]interface{}   // 自定义字段（net/http）
-    CustomFieldsFiber     func(fiber.Ctx) map[string]interface{}   // 自定义字段（Fiber）
     TrustedProxies        []string      // 代理 IP/CIDR，用于从 X-Forwarded-For 解析客户端 IP
 }
 ```
+
+Fiber 类型的钩子位于内嵌了本结构体的 `fiberadapter.Config` 上：
+`SkipFunc func(fiber.Ctx) bool` 与 `CustomFields func(fiber.Ctx) map[string]interface{}`。
 
 **敏感数据**默认会被脱敏，详见下文的[脱敏](#脱敏)一节。
 
@@ -438,12 +442,65 @@ type LevelHandlerConfig struct {
     Logger          *Logger  // 要控制的日志器（nil=默认）
     AllowedIPs      []string // IP 白名单（空=允许所有）
     TrustedProxies  []string // 代理 IP/CIDR，用于解析 X-Forwarded-For
-    RequireAuth     bool     // 是否要求 AuthFunc/AuthFuncFiber
+    RequireAuth     bool     // 是否要求 AuthFunc
     AuthFunc        func(*http.Request) bool  // net/http 鉴权
-    AuthFuncFiber   func(fiber.Ctx) bool    // Fiber 鉴权
     MaxBodyBytes    int64    // PUT/POST 最大 body（默认 4096）
 }
 ```
+
+Fiber 的鉴权钩子位于内嵌了本结构体的 `fiberadapter.LevelHandlerConfig` 上：
+`AuthFunc func(fiber.Ctx) bool`。
+
+### 框架适配器
+
+`fiberadapter` 完全建立在本包的导出 API 之上，因此这套 API 同样足以写出 Echo、Gin
+或 chi 的适配器。**不允许因框架而异**的规则都住在本包、并从这里读取——可信代理的判定，
+或者"什么算敏感 header"的答案，一旦因框架而异，就意味着同一个 token 在一个框架里被
+脱敏、在另一个框架里明文落盘。
+
+**可信代理规则下的客户端 IP。** 实现两个方法即可复用该规则：
+
+```go
+type ClientIPSource interface {
+    RemoteAddr() string        // "host:port" 或 "[host]:port"
+    Header(name string) string // 不存在时返回 ""
+}
+
+ip := logger.ClientIP(src, cfg.TrustedProxies)
+```
+
+只有当直连对端本身在 `TrustedProxies` 列表中时，`X-Forwarded-For`（其次
+`X-Real-IP`）才会被采信。列表为空时代理头永不被信任——这正是 `AllowedIPs` 无法被
+伪造的原因。现成的 source：net/http 用 `logger.RequestSource(r)`，Fiber 用
+`fiberadapter.Source{C: c}`。
+
+**配置解析。** 按内置中间件的方式解析 `MiddlewareConfig`，而不是自己重述默认值：
+
+```go
+cfg = cfg.Normalized()            // logger、request-id header、body 上限、三个级别、敏感 header
+skip := cfg.SkipPathSet()         // SkipPaths 的查找集合
+hdrs := cfg.SensitiveHeaderSet()  // 小写化的待脱敏 header 名
+bodyKeys := cfg.SensitiveBodyKeys()   // 为空时回退到包默认值
+queryKeys := cfg.SensitiveQueryKeys() // 设置 DisableQueryRedaction 时为 nil
+
+logged := logger.RedactBody(contentType, raw, bodyKeys)
+q := logger.RedactQuery(rawQuery, queryKeys)
+id := logger.NewRequestID()
+```
+
+**日志级别端点。** 决策部分与框架无关，只有渲染由适配器决定：
+
+```go
+if denied := cfg.Authorize(src, authenticated); denied != nil {
+    // denied.StatusCode、denied.Error
+}
+out := cfg.CurrentLevel()   // GET
+out = cfg.ApplyLevel(name)  // PUT/POST，先读取至多 cfg.MaxBody() 字节
+// out.StatusCode、out.Body（*LevelResponse）
+```
+
+`LevelOutcome` 刻意不绑定渲染方式：`logger.LevelHandler` 以 **text/plain** 输出错误，
+`fiberadapter.LevelHandler` 输出 `{"error": ...}`，两者都保持各自一贯的输出。
 
 ### 上下文与请求辅助函数
 
@@ -536,6 +593,24 @@ cw := logger.NewConsoleWriter(logger.DefaultConsoleWriterConfig())
 `logger.TimeFormatPresets` 提供了现成的时间戳布局，`logger.DefaultFieldNames()`
 返回 `FieldNames` 结构体，可用于重命名 `level`、`message`、`time`、`caller`、
 `error` 和 `stack`。
+
+## 升级说明（v2.4.0）
+
+**破坏性变更：Fiber 支持移入 `fiberadapter`。** 本文件顶部的说明里有逐个调用的迁移
+对照表。net/http 一侧没有任何变化。
+
+这次搬迁给不使用 Fiber 的服务带来什么：根包不再导入 Fiber，因此这类二进制少链接
+**25 个包**、build list 里少 **11 个模块**，而且连 `fasthttp` 都不会下载——Go 的
+模块图裁剪会把它彻底挡在 `go.sum` 之外。
+
+- 新增 16 个纯增量导出，把与框架无关的规则开放复用，让树外适配器直接读取而不是重述。
+  见[框架适配器](#框架适配器)。
+- 依赖刷新：`gofiber/schema` v1.8.7、`gofiber/utils/v2` v2.5.2、
+  `molecule-man/go-brrr` v1.1.1。直接依赖（`fiber` v3.5.0、`zerolog` v1.35.1、
+  `uuid` v1.6.0、`testify` v1.12.1）未变。
+- CI action 刷新：`actions/checkout`、`actions/setup-go`、`actions/upload-artifact`
+  升至 v7，`codecov/codecov-action` 升至 v7，`soulteary/goreportcard-action`
+  升至 v1.1.2。
 
 ## 升级说明（v2.3.0）
 

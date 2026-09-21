@@ -46,7 +46,7 @@ A structured logging toolkit for Go applications based on [zerolog](https://gith
 
 ## Security
 
-- **Level endpoint**: In production, always set `AllowedIPs` or `RequireAuth`; do not expose the endpoint publicly. When behind a reverse proxy, set `TrustedProxies` to your proxy IPs. If `RequireAuth` is true, you must supply `AuthFunc`/`AuthFuncFiber` or requests will be rejected.
+- **Level endpoint**: In production, always set `AllowedIPs` or `RequireAuth`; do not expose the endpoint publicly. When behind a reverse proxy, set `TrustedProxies` to your proxy IPs. If `RequireAuth` is true, you must supply an `AuthFunc` — `logger.LevelHandlerConfig.AuthFunc` for net/http, `fiberadapter.LevelHandlerConfig.AuthFunc` for Fiber — or requests will be rejected.
 - **Query/body logging**: Query parameters are logged by default; `SensitiveQueryParams` (default list redacts common keys like `password`, `token`) avoids leaking secrets, and `DisableQueryRedaction` turns it off. Logged request bodies get the same treatment through `SensitiveBodyFields` / `DisableBodyRedaction`. Avoid enabling `IncludeBody` on sensitive routes. Unparseable query strings are fully redacted.
 - See [SECURITY.md](SECURITY.md) for details and how to report vulnerabilities.
 
@@ -54,10 +54,13 @@ A structured logging toolkit for Go applications based on [zerolog](https://gith
 
 - **Go 1.27+** (`go.mod` declares `go 1.27.0`)
 - `github.com/rs/zerolog`
-- `github.com/gofiber/fiber/v3` v3.4.0+ for the Fiber middleware and handlers
+- `github.com/gofiber/fiber/v3` v3.4.0+ — **only if you import `fiberadapter`**
 
 This v2 module line targets Fiber v3. Applications still on Fiber v2 should
 remain on `github.com/soulteary/logger-kit` v1.
+
+Since v2.4.0 the root package does not import Fiber, so a net/http, Echo, Gin or
+chi service never links it — or downloads it.
 
 ## Installation
 
@@ -176,7 +179,7 @@ func main() {
 // PUT or POST /log/level - Set log level (body: {"level": "debug"} or query: ?level=debug)
 ```
 
-**Security (Level endpoint):** In production you must set `AllowedIPs` or `RequireAuth` so only trusted callers can change the log level. Do not expose this endpoint to the public. When behind a reverse proxy, set `TrustedProxies` to your proxy IPs so client IP checks work correctly. If you enable `RequireAuth`, you must provide an `AuthFunc`/`AuthFuncFiber`. See [SECURITY.md](SECURITY.md) for details.
+**Security (Level endpoint):** In production you must set `AllowedIPs` or `RequireAuth` so only trusted callers can change the log level. Do not expose this endpoint to the public. When behind a reverse proxy, set `TrustedProxies` to your proxy IPs so client IP checks work correctly. If you enable `RequireAuth`, you must provide an `AuthFunc` (on the Fiber side, `fiberadapter.LevelHandlerConfig.AuthFunc`). See [SECURITY.md](SECURITY.md) for details.
 
 ### Request Logging Middleware
 
@@ -371,7 +374,6 @@ type MiddlewareConfig struct {
     Logger                *Logger       // Logger instance (nil = default)
     SkipPaths             []string      // Paths to skip logging
     SkipFunc              func(*http.Request) bool // Skip for net/http
-    SkipFuncFiber         func(fiber.Ctx) bool   // Skip for Fiber
     LogLevel              Level         // Level for 2xx responses
     WarnLevel             Level         // Level for 4xx responses
     ErrorLevel            Level         // Level for 5xx responses
@@ -389,10 +391,12 @@ type MiddlewareConfig struct {
     DisableBodyRedaction  bool          // Log request bodies verbatim
     MaxBodySize           int           // Max body size to log
     CustomFields          func(*http.Request) map[string]interface{}     // Extra fields (net/http)
-    CustomFieldsFiber     func(fiber.Ctx) map[string]interface{}        // Extra fields (Fiber)
     TrustedProxies        []string      // Proxy IPs/CIDRs for client IP from X-Forwarded-For
 }
 ```
+
+The Fiber-typed hooks live on `fiberadapter.Config`, which embeds this struct:
+`SkipFunc func(fiber.Ctx) bool` and `CustomFields func(fiber.Ctx) map[string]interface{}`.
 
 **Sensitive data** is redacted by default. See [Redaction](#redaction) below.
 
@@ -445,12 +449,71 @@ type LevelHandlerConfig struct {
     Logger          *Logger  // Logger to control (nil = default)
     AllowedIPs      []string // IP allowlist (empty = allow all)
     TrustedProxies  []string // Proxy IPs/CIDRs for X-Forwarded-For
-    RequireAuth     bool     // Require AuthFunc/AuthFuncFiber
+    RequireAuth     bool     // Require AuthFunc
     AuthFunc        func(*http.Request) bool  // Auth for net/http
-    AuthFuncFiber   func(fiber.Ctx) bool     // Auth for Fiber
     MaxBodyBytes    int64    // Max body for PUT/POST (default 4096)
 }
 ```
+
+The Fiber auth hook lives on `fiberadapter.LevelHandlerConfig`, which embeds
+this struct: `AuthFunc func(fiber.Ctx) bool`.
+
+### Framework Adapters
+
+`fiberadapter` is built entirely on this package's exported API, so that API is
+also enough for an Echo, Gin or chi adapter. The rules that **must not differ
+between frameworks** live here and are read from here — a trusted-proxy
+decision, or a "what counts as a sensitive header" answer, that varies by
+framework means a token redacted on one and logged in clear on the other.
+
+**Client IP under the trusted-proxy rule.** Implement two methods and the rule
+is yours:
+
+```go
+type ClientIPSource interface {
+    RemoteAddr() string        // "host:port" or "[host]:port"
+    Header(name string) string // "" when absent
+}
+
+ip := logger.ClientIP(src, cfg.TrustedProxies)
+```
+
+`X-Forwarded-For` (then `X-Real-IP`) is honoured only when the direct peer is
+itself listed in `TrustedProxies`. With an empty list the proxy headers are
+never trusted, which is what keeps `AllowedIPs` from being spoofable. Ready-made
+sources: `logger.RequestSource(r)` for `*http.Request`, `fiberadapter.Source{C: c}`
+for Fiber.
+
+**Config resolution.** Resolve a `MiddlewareConfig` the way the built-in
+middleware does, instead of restating the defaults:
+
+```go
+cfg = cfg.Normalized()            // logger, request-id header, body cap, levels, sensitive headers
+skip := cfg.SkipPathSet()         // SkipPaths as a lookup set
+hdrs := cfg.SensitiveHeaderSet()  // lower-cased header names to redact
+bodyKeys := cfg.SensitiveBodyKeys()   // falls back to the package defaults
+queryKeys := cfg.SensitiveQueryKeys() // nil when DisableQueryRedaction is set
+
+logged := logger.RedactBody(contentType, raw, bodyKeys)
+q := logger.RedactQuery(rawQuery, queryKeys)
+id := logger.NewRequestID()
+```
+
+**The level endpoint.** The decisions are framework-free; only rendering is
+yours:
+
+```go
+if denied := cfg.Authorize(src, authenticated); denied != nil {
+    // denied.StatusCode, denied.Error
+}
+out := cfg.CurrentLevel()   // GET
+out = cfg.ApplyLevel(name)  // PUT/POST, after reading at most cfg.MaxBody() bytes
+// out.StatusCode, out.Body (*LevelResponse)
+```
+
+`LevelOutcome` is deliberately render-agnostic: `logger.LevelHandler` writes
+errors as **text/plain** while `fiberadapter.LevelHandler` writes
+`{"error": ...}`, and each keeps the output it has always had.
 
 ### Context and Request Helpers
 
@@ -543,6 +606,26 @@ cw := logger.NewConsoleWriter(logger.DefaultConsoleWriterConfig())
 `logger.TimeFormatPresets` holds the ready-made timestamp layouts, and
 `logger.DefaultFieldNames()` returns the `FieldNames` struct if you need to
 rename `level`, `message`, `time`, `caller`, `error` or `stack`.
+
+## Upgrade Notes (v2.4.0)
+
+**Breaking: Fiber support moved to `fiberadapter`.** The note at the top of this
+file has the call-by-call migration table. Nothing on the net/http side changed.
+
+What the move buys a service that does not use Fiber: the root package no longer
+imports it, so such a binary links **25 fewer packages**, carries **11 fewer
+modules** in its build list, and does not even download `fasthttp` — Go's
+module-graph pruning keeps it out of `go.sum` entirely.
+
+- Sixteen additive exports make the framework-independent rules reusable, so an
+  out-of-tree adapter reads them rather than restating them. See
+  [Framework Adapters](#framework-adapters).
+- Dependency refresh: `gofiber/schema` v1.8.7, `gofiber/utils/v2` v2.5.2,
+  `molecule-man/go-brrr` v1.1.1. The direct requirements (`fiber` v3.5.0,
+  `zerolog` v1.35.1, `uuid` v1.6.0, `testify` v1.12.1) are unchanged.
+- CI actions refreshed: `actions/checkout`, `actions/setup-go` and
+  `actions/upload-artifact` to v7, `codecov/codecov-action` to v7,
+  `soulteary/goreportcard-action` to v1.1.2.
 
 ## Upgrade Notes (v2.3.0)
 
