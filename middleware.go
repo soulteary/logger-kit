@@ -140,11 +140,13 @@ var defaultSensitiveQueryParams = []string{
 	"access_token", "refresh_token", "session", "session_id",
 }
 
-// redactQuery redacts sensitive query parameters. An empty sensitiveKeys means
-// nothing is redacted; callers pass the default list when they want redaction.
-// RedactQuery masks the values of sensitive query parameters. Exported so a
-// framework adapter redacts by the same rule -- a log line that leaks a token
-// on one framework and not the other is the worst kind of inconsistency.
+// RedactQuery masks the values of sensitive query parameters. An empty
+// sensitiveKeys means nothing is redacted; callers pass the default list when
+// they want redaction.
+//
+// Exported so a framework adapter redacts by the same rule -- a log line that
+// leaks a token on one framework and not the other is the worst kind of
+// inconsistency.
 func RedactQuery(rawQuery string, sensitiveKeys []string) string {
 	if rawQuery == "" {
 		return ""
@@ -199,8 +201,6 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 	rw.size += size
 	return size, err
 }
-
-// Middleware creates a standard net/http logging middleware.
 
 // Normalized fills in every default the middleware relies on: the logger, the
 // request-id header, the body-size cap, the three log levels and the
@@ -281,6 +281,7 @@ func (cfg MiddlewareConfig) SensitiveHeaderSet() map[string]bool {
 	return set
 }
 
+// Middleware creates a standard net/http logging middleware.
 func Middleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 	cfg = cfg.Normalized()
 	skipPathMap := cfg.SkipPathSet()
@@ -432,7 +433,6 @@ func Middleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 	}
 }
 
-// generateUUID generates a UUID v4 using crypto/rand (via google/uuid).
 // NewRequestID returns the request id this package puts on log lines and in
 // the X-Request-ID header. Exported for framework adapters.
 //

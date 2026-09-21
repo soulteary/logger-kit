@@ -3,6 +3,7 @@ package logger
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -476,4 +477,30 @@ func TestLevelHandler_RemoteAddr_NoPort(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// failingResponseWriter fails every Write, so the JSON encoder reports an error.
+type failingResponseWriter struct {
+	header http.Header
+	code   int
+}
+
+func (f *failingResponseWriter) Header() http.Header {
+	if f.header == nil {
+		f.header = make(http.Header)
+	}
+	return f.header
+}
+func (f *failingResponseWriter) Write([]byte) (int, error) { return 0, errors.New("connection reset") }
+func (f *failingResponseWriter) WriteHeader(code int)      { f.code = code }
+
+func TestLevelHandler_EncodeFailure(t *testing.T) {
+	handler := LevelHandler(LevelHandlerConfig{})
+
+	w := &failingResponseWriter{}
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/log/level", nil))
+
+	// The response is already committed, so all the handler can do is try the
+	// 500. What matters is that it does not panic on a broken connection.
+	assert.Equal(t, http.StatusInternalServerError, w.code)
 }

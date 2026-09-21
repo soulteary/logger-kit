@@ -19,7 +19,8 @@ var defaultSensitiveBodyFields = []string{
 	"otp", "pin", "cvv", "card_number",
 }
 
-// redactBody removes sensitive values from a request body before it is logged.
+// RedactBody masks the named fields in a request/response body before it is
+// logged. Exported so a framework adapter redacts by the same rule.
 //
 // Query parameters and headers were already redacted while the body was
 // written out verbatim -- and a JSON or form login request carries its password
@@ -29,8 +30,6 @@ var defaultSensitiveBodyFields = []string{
 // JSON objects and form-encoded bodies are redacted field by field. A body in
 // any other format cannot be redacted field-wise, so it is replaced wholesale
 // rather than logged raw.
-// RedactBody masks the named fields in a request/response body before it is
-// logged. Exported so a framework adapter redacts by the same rule.
 func RedactBody(contentType string, body []byte, fields []string) string {
 	if len(body) == 0 {
 		return ""

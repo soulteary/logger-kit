@@ -467,3 +467,38 @@ func TestMiddleware_Query_NilSensitiveParams(t *testing.T) {
 	assert.Contains(t, output, "token=secret123", "DisableQueryRedaction should not redact")
 	assert.Contains(t, output, "foo=bar")
 }
+
+func TestMiddleware_IncludeLatencyDisabled(t *testing.T) {
+	var buf bytes.Buffer
+	log := New(Config{Level: InfoLevel, Output: &buf, Format: FormatJSON})
+
+	handler := Middleware(MiddlewareConfig{Logger: log, IncludeLatency: false})(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/test", nil))
+
+	var entry map[string]interface{}
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+	assert.NotContains(t, entry, "latency")
+	assert.Equal(t, "/test", entry["path"], "the rest of the entry is unaffected")
+}
+
+func TestMiddleware_IncludeLatencyEnabled(t *testing.T) {
+	var buf bytes.Buffer
+	log := New(Config{Level: InfoLevel, Output: &buf, Format: FormatJSON})
+
+	handler := Middleware(MiddlewareConfig{Logger: log, IncludeLatency: true})(
+		http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		}),
+	)
+
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/test", nil))
+
+	var entry map[string]interface{}
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &entry))
+	assert.Contains(t, entry, "latency")
+}

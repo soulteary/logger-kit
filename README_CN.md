@@ -221,7 +221,8 @@ package main
 
 import (
     "github.com/gofiber/fiber/v3"
-    "github.com/soulteary/logger-kit/v2"
+    logger "github.com/soulteary/logger-kit/v2"
+    "github.com/soulteary/logger-kit/v2/fiberadapter"
 )
 
 func main() {
@@ -229,10 +230,12 @@ func main() {
     
     app := fiber.New()
     
-    app.Use(fiberadapter.Middleware(logger.MiddlewareConfig{
-        Logger:           log,
-        SkipPaths:        []string{"/health"},
-        IncludeRequestID: true,
+    app.Use(fiberadapter.Middleware(fiberadapter.Config{
+        MiddlewareConfig: logger.MiddlewareConfig{
+            Logger:           log,
+            SkipPaths:        []string{"/health"},
+            IncludeRequestID: true,
+        },
     }))
     
     app.Get("/", func(c fiber.Ctx) error {
@@ -244,8 +247,10 @@ func main() {
     })
     
     // 注册日志级别端点
-    fiberadapter.RegisterLevelEndpoint(app, "/log/level", logger.LevelHandlerConfig{
-        Logger: log,
+    fiberadapter.RegisterLevelEndpoint(app, "/log/level", fiberadapter.LevelHandlerConfig{
+        LevelHandlerConfig: logger.LevelHandlerConfig{
+            Logger: log,
+        },
     })
     
     app.Listen(":3000")

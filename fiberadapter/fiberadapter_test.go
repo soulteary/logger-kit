@@ -589,13 +589,12 @@ func TestLevelHandlerFiber_AllowedIPs(t *testing.T) {
 		},
 	}))
 
-	// Request from non-allowed IP (Fiber uses different IP detection)
+	// app.Test dials from fiberTestPeer, which is not on the list.
 	req := httptest.NewRequest(http.MethodGet, "/log/level", nil)
 	resp, err := app.Test(req)
 	require.NoError(t, err)
 
-	// In test environment, IP detection may differ
-	assert.True(t, resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusForbidden)
+	assert.Equal(t, http.StatusForbidden, resp.StatusCode)
 }
 
 func TestLevelHandlerFiber_RequireAuth(t *testing.T) {
