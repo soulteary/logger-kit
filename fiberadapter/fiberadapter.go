@@ -59,6 +59,41 @@ const (
 	fiberRequestIDKey
 )
 
+// installRequestID resolves the request id, propagates it onto the request
+// header, the response header and the Fiber locals, and returns it.
+func installRequestID(c fiber.Ctx, cfg logger.MiddlewareConfig) string {
+	requestID := c.Get(cfg.RequestIDHeader)
+	if requestID == "" && cfg.IncludeRequestID {
+		if cfg.GenerateRequestID != nil {
+			requestID = cfg.GenerateRequestID()
+		} else {
+			requestID = logger.NewRequestID()
+		}
+		c.Request().Header.Set(cfg.RequestIDHeader, requestID)
+	}
+	if cfg.IncludeRequestID && requestID != "" {
+		c.Set(cfg.RequestIDHeader, requestID)
+	}
+	if requestID != "" {
+		c.Locals(fiberRequestIDKey, requestID)
+	}
+	return requestID
+}
+
+// redactedHeaders is the request's headers with the sensitive ones masked.
+func redactedHeaders(c fiber.Ctx, sensitive map[string]bool) map[string]string {
+	headers := make(map[string]string)
+	for key, value := range c.Request().Header.All() {
+		name := string(key)
+		if sensitive[strings.ToLower(name)] {
+			headers[name] = "[REDACTED]"
+		} else {
+			headers[name] = string(value)
+		}
+	}
+	return headers
+}
+
 // Middleware creates a Fiber logging middleware.
 func Middleware(config ...Config) fiber.Handler {
 	cfg, skip, custom := resolve(config...)
@@ -66,143 +101,42 @@ func Middleware(config ...Config) fiber.Handler {
 	skipPathMap := cfg.SkipPathSet()
 	sensitiveHeaderMap := cfg.SensitiveHeaderSet()
 	sensitiveBodyFields := cfg.SensitiveBodyKeys()
-	sensitiveQueryKeys := cfg.SensitiveQueryKeys()
 
 	return func(c fiber.Ctx) error {
-		// Skip if path is in skip list
-		if skipPathMap[c.Path()] {
-			return c.Next()
-		}
-
-		// Skip if skip function returns true
-		if skip != nil && skip(c) {
+		// Skip if the path is in the skip list, or the skip func says so
+		if skipPathMap[c.Path()] || (skip != nil && skip(c)) {
 			return c.Next()
 		}
 
 		start := time.Now()
 
-		// Handle request ID
-		requestID := c.Get(cfg.RequestIDHeader)
-		if requestID == "" && cfg.IncludeRequestID {
-			if cfg.GenerateRequestID != nil {
-				requestID = cfg.GenerateRequestID()
-			} else {
-				requestID = logger.NewRequestID()
-			}
-			c.Request().Header.Set(cfg.RequestIDHeader, requestID)
-		}
-
-		// Set request ID in response header
-		if cfg.IncludeRequestID && requestID != "" {
-			c.Set(cfg.RequestIDHeader, requestID)
-		}
-
-		// Store request ID in locals
-		if requestID != "" {
-			c.Locals(fiberRequestIDKey, requestID)
-		}
-
-		// Store logger in locals
+		requestID := installRequestID(c, cfg)
 		c.Locals(fiberLoggerKey, cfg.Logger)
 
-		// Process request
 		err := c.Next()
 
-		// Calculate latency
-		latency := time.Since(start)
-
-		// Get status code
-		status := c.Response().StatusCode()
-
-		// Determine log level based on status code
-		var logLevel logger.Level
-		switch {
-		case status >= 500:
-			logLevel = cfg.ErrorLevel
-		case status >= 400:
-			logLevel = cfg.WarnLevel
-		default:
-			logLevel = cfg.LogLevel
+		fields := logger.RequestFields{
+			Method:    c.Method(),
+			Path:      c.Path(),
+			Status:    c.Response().StatusCode(),
+			ClientIP:  logger.ClientIP(Source{C: c}, cfg.TrustedProxies),
+			UserAgent: c.Get("User-Agent"),
+			RequestID: requestID,
+			Latency:   time.Since(start),
+			RawQuery:  string(c.Request().URI().QueryString()),
+			Err:       err,
 		}
-
-		// Build log event
-		zl := cfg.Logger.Zerolog()
-		event := zl.WithLevel(logLevel.ToZerolog())
-
-		// Add standard fields
-		event = event.
-			Str("method", c.Method()).
-			Str("path", c.Path()).
-			Int("status", status).
-			Str("ip", logger.ClientIP(Source{C: c}, cfg.TrustedProxies)).
-			Str("user_agent", c.Get("User-Agent"))
-
-		// Add request ID
-		if cfg.IncludeRequestID && requestID != "" {
-			event = event.Str("request_id", requestID)
-		}
-
-		// Add latency
-		if cfg.IncludeLatency {
-			event = event.Dur("latency", latency)
-		}
-
-		// Add query parameters (with sensitive keys redacted)
-		if cfg.IncludeQuery {
-			query := c.Request().URI().QueryString()
-			if len(query) > 0 {
-				event = event.Str("query", logger.RedactQuery(string(query), sensitiveQueryKeys))
-			}
-		}
-
-		// Add headers
 		if cfg.IncludeHeaders {
-			headers := make(map[string]string)
-			for key, value := range c.Request().Header.All() {
-				headerName := string(key)
-				if sensitiveHeaderMap[strings.ToLower(headerName)] {
-					headers[headerName] = "[REDACTED]"
-				} else {
-					headers[headerName] = string(value)
-				}
-			}
-			event = event.Interface("headers", headers)
+			fields.Headers = redactedHeaders(c, sensitiveHeaderMap)
 		}
-
-		// Add request body if enabled
 		if cfg.IncludeBody {
-			body := c.Body()
-			truncated := false
-			if len(body) > cfg.MaxBodySize {
-				body = body[:cfg.MaxBodySize]
-				truncated = true
-			}
-			if len(body) > 0 {
-				logged := string(body)
-				if !cfg.DisableBodyRedaction {
-					logged = logger.RedactBody(c.Get("Content-Type"), body, sensitiveBodyFields)
-				}
-				if truncated {
-					logged += "...[truncated]"
-				}
-				event = event.Str("request_body", logged)
-			}
+			fields.Body = cfg.BodyForLog(c.Get("Content-Type"), c.Body(), sensitiveBodyFields)
 		}
-
-		// Add custom fields
 		if custom != nil {
-			for key, value := range custom(c) {
-				event = event.Interface(key, value)
-			}
+			fields.Custom = custom(c)
 		}
 
-		// Add error if present
-		if err != nil {
-			event = event.Err(err)
-		}
-
-		// Send log
-		event.Msg("HTTP request")
+		cfg.LogRequest(fields)
 
 		return err
 	}
