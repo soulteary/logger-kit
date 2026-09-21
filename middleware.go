@@ -8,16 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/gofiber/fiber/v3"
 	"github.com/google/uuid"
-	"github.com/rs/zerolog"
-)
-
-type fiberContextKey uint8
-
-const (
-	fiberLoggerKey fiberContextKey = iota
-	fiberRequestIDKey
 )
 
 // MiddlewareConfig configures the logging middleware.
@@ -33,9 +24,6 @@ type MiddlewareConfig struct {
 	// SkipFunc is a function to determine if logging should be skipped.
 	// If it returns true, the request is not logged.
 	SkipFunc func(r *http.Request) bool
-
-	// SkipFuncFiber is a function to determine if logging should be skipped (Fiber).
-	SkipFuncFiber func(c fiber.Ctx) bool
 
 	// LogLevel is the log level for successful requests (status < 400).
 	// Default: InfoLevel
@@ -118,9 +106,6 @@ type MiddlewareConfig struct {
 	// CustomFields adds custom fields to each log entry.
 	CustomFields func(r *http.Request) map[string]interface{}
 
-	// CustomFieldsFiber adds custom fields to each log entry (Fiber).
-	CustomFieldsFiber func(c fiber.Ctx) map[string]interface{}
-
 	// TrustedProxies is a list of proxy IPs (or CIDRs). When non-empty, X-Forwarded-For
 	// and X-Real-IP are only used for the "ip" log field when the direct peer is in this list.
 	// When empty (default), only RemoteAddr is used. Set this when behind a reverse proxy.
@@ -157,7 +142,10 @@ var defaultSensitiveQueryParams = []string{
 
 // redactQuery redacts sensitive query parameters. An empty sensitiveKeys means
 // nothing is redacted; callers pass the default list when they want redaction.
-func redactQuery(rawQuery string, sensitiveKeys []string) string {
+// RedactQuery masks the values of sensitive query parameters. Exported so a
+// framework adapter redacts by the same rule -- a log line that leaks a token
+// on one framework and not the other is the worst kind of inconsistency.
+func RedactQuery(rawQuery string, sensitiveKeys []string) string {
 	if rawQuery == "" {
 		return ""
 	}
@@ -213,7 +201,15 @@ func (rw *responseWriter) Write(b []byte) (int, error) {
 }
 
 // Middleware creates a standard net/http logging middleware.
-func Middleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
+
+// Normalized fills in every default the middleware relies on: the logger, the
+// request-id header, the body-size cap, the three log levels and the
+// sensitive-header list.
+//
+// Exported because a framework adapter must resolve a config exactly the way
+// this package does. "What counts as sensitive" differing by framework would
+// mean a token redacted on one and logged in clear on the other.
+func (cfg MiddlewareConfig) Normalized() MiddlewareConfig {
 	if cfg.Logger == nil {
 		cfg.Logger = defaultLogger
 	}
@@ -223,8 +219,10 @@ func Middleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 	if cfg.MaxBodySize <= 0 {
 		cfg.MaxBodySize = 1024
 	}
-	// Apply default log levels if not set (zero value is DebugLevel)
-	// We check if all three are at their zero value to avoid overwriting intentional DebugLevel
+
+	// Apply default log levels if not set (zero value is DebugLevel).
+	// All three at their zero value means "unset"; that avoids overwriting an
+	// intentional DebugLevel.
 	defaults := DefaultMiddlewareConfig()
 	if cfg.LogLevel == DebugLevel && cfg.WarnLevel == DebugLevel && cfg.ErrorLevel == DebugLevel {
 		cfg.LogLevel = defaults.LogLevel
@@ -232,35 +230,63 @@ func Middleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 		cfg.ErrorLevel = defaults.ErrorLevel
 	}
 
-	skipPathMap := make(map[string]bool)
-	for _, p := range cfg.SkipPaths {
-		skipPathMap[p] = true
-	}
-
-	sensitiveHeaderMap := make(map[string]bool)
 	if len(cfg.SensitiveHeaders) == 0 {
 		cfg.SensitiveHeaders = []string{"Authorization", "X-API-Key", "X-Signature", "Cookie", "Set-Cookie"}
 	}
+
+	return cfg
+}
+
+// SensitiveBodyKeys returns the body field names to redact, falling back to the
+// package defaults when none are configured.
+func (cfg MiddlewareConfig) SensitiveBodyKeys() []string {
+	if len(cfg.SensitiveBodyFields) == 0 {
+		return defaultSensitiveBodyFields
+	}
+	return cfg.SensitiveBodyFields
+}
+
+// SensitiveQueryKeys returns the query keys to redact, or nil when redaction is
+// switched off.
+//
+// An empty list means "use the defaults"; turning redaction off is spelled
+// DisableQueryRedaction. Relying on nil-versus-empty did not survive a round
+// trip through JSON or YAML, where an omitted field unmarshals to nil -- so
+// deserialising a config silently disabled redaction.
+func (cfg MiddlewareConfig) SensitiveQueryKeys() []string {
+	if cfg.DisableQueryRedaction {
+		return nil
+	}
+	if len(cfg.SensitiveQueryParams) == 0 {
+		return defaultSensitiveQueryParams
+	}
+	return cfg.SensitiveQueryParams
+}
+
+// SkipPathSet is cfg.SkipPaths as a lookup set.
+func (cfg MiddlewareConfig) SkipPathSet() map[string]bool {
+	set := make(map[string]bool, len(cfg.SkipPaths))
+	for _, p := range cfg.SkipPaths {
+		set[p] = true
+	}
+	return set
+}
+
+// SensitiveHeaderSet is cfg.SensitiveHeaders lower-cased, as a lookup set.
+func (cfg MiddlewareConfig) SensitiveHeaderSet() map[string]bool {
+	set := make(map[string]bool, len(cfg.SensitiveHeaders))
 	for _, h := range cfg.SensitiveHeaders {
-		sensitiveHeaderMap[strings.ToLower(h)] = true
+		set[strings.ToLower(h)] = true
 	}
+	return set
+}
 
-	sensitiveBodyFields := cfg.SensitiveBodyFields
-	if len(sensitiveBodyFields) == 0 {
-		sensitiveBodyFields = defaultSensitiveBodyFields
-	}
-
-	// An empty list means "use the defaults"; turning redaction off is spelled
-	// DisableQueryRedaction. Relying on nil-versus-empty did not survive a
-	// round trip through JSON or YAML, where an omitted field unmarshals to
-	// nil -- so deserialising a config silently disabled redaction.
-	var sensitiveQueryKeys []string
-	if !cfg.DisableQueryRedaction {
-		sensitiveQueryKeys = cfg.SensitiveQueryParams
-		if len(sensitiveQueryKeys) == 0 {
-			sensitiveQueryKeys = defaultSensitiveQueryParams
-		}
-	}
+func Middleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
+	cfg = cfg.Normalized()
+	skipPathMap := cfg.SkipPathSet()
+	sensitiveHeaderMap := cfg.SensitiveHeaderSet()
+	sensitiveBodyFields := cfg.SensitiveBodyKeys()
+	sensitiveQueryKeys := cfg.SensitiveQueryKeys()
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -284,7 +310,7 @@ func Middleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 				if cfg.GenerateRequestID != nil {
 					requestID = cfg.GenerateRequestID()
 				} else {
-					requestID = generateUUID()
+					requestID = NewRequestID()
 				}
 				r.Header.Set(cfg.RequestIDHeader, requestID)
 			}
@@ -340,7 +366,7 @@ func Middleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 				Str("method", r.Method).
 				Str("path", r.URL.Path).
 				Int("status", rw.status).
-				Str("ip", getClientIPStd(r, cfg.TrustedProxies)).
+				Str("ip", ClientIP(RequestSource(r), cfg.TrustedProxies)).
 				Str("user_agent", r.UserAgent())
 
 			// Add request ID
@@ -355,7 +381,7 @@ func Middleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 
 			// Add query parameters (with sensitive keys redacted)
 			if cfg.IncludeQuery && r.URL.RawQuery != "" {
-				event = event.Str("query", redactQuery(r.URL.RawQuery, sensitiveQueryKeys))
+				event = event.Str("query", RedactQuery(r.URL.RawQuery, sensitiveQueryKeys))
 			}
 
 			// Add headers
@@ -380,7 +406,7 @@ func Middleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 				}
 				logged := string(body)
 				if !cfg.DisableBodyRedaction {
-					logged = redactBody(r.Header.Get("Content-Type"), body, sensitiveBodyFields)
+					logged = RedactBody(r.Header.Get("Content-Type"), body, sensitiveBodyFields)
 				}
 				if truncated {
 					logged += "...[truncated]"
@@ -406,224 +432,14 @@ func Middleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 	}
 }
 
-// FiberMiddleware creates a Fiber logging middleware.
-func FiberMiddleware(cfg MiddlewareConfig) fiber.Handler {
-	if cfg.Logger == nil {
-		cfg.Logger = defaultLogger
-	}
-	if cfg.RequestIDHeader == "" {
-		cfg.RequestIDHeader = "X-Request-ID"
-	}
-	if cfg.MaxBodySize <= 0 {
-		cfg.MaxBodySize = 1024
-	}
-	// Apply default log levels if not set (zero value is DebugLevel)
-	defaults := DefaultMiddlewareConfig()
-	if cfg.LogLevel == DebugLevel && cfg.WarnLevel == DebugLevel && cfg.ErrorLevel == DebugLevel {
-		cfg.LogLevel = defaults.LogLevel
-		cfg.WarnLevel = defaults.WarnLevel
-		cfg.ErrorLevel = defaults.ErrorLevel
-	}
-
-	skipPathMap := make(map[string]bool)
-	for _, p := range cfg.SkipPaths {
-		skipPathMap[p] = true
-	}
-
-	sensitiveHeaderMap := make(map[string]bool)
-	if len(cfg.SensitiveHeaders) == 0 {
-		cfg.SensitiveHeaders = []string{"Authorization", "X-API-Key", "X-Signature", "Cookie", "Set-Cookie"}
-	}
-	for _, h := range cfg.SensitiveHeaders {
-		sensitiveHeaderMap[strings.ToLower(h)] = true
-	}
-
-	sensitiveBodyFieldsFiber := cfg.SensitiveBodyFields
-	if len(sensitiveBodyFieldsFiber) == 0 {
-		sensitiveBodyFieldsFiber = defaultSensitiveBodyFields
-	}
-
-	// An empty list means "use the defaults"; turning redaction off is spelled
-	// DisableQueryRedaction. Relying on nil-versus-empty did not survive a
-	// round trip through JSON or YAML, where an omitted field unmarshals to
-	// nil -- so deserialising a config silently disabled redaction.
-	var sensitiveQueryKeysFiber []string
-	if !cfg.DisableQueryRedaction {
-		sensitiveQueryKeysFiber = cfg.SensitiveQueryParams
-		if len(sensitiveQueryKeysFiber) == 0 {
-			sensitiveQueryKeysFiber = defaultSensitiveQueryParams
-		}
-	}
-
-	return func(c fiber.Ctx) error {
-		// Skip if path is in skip list
-		if skipPathMap[c.Path()] {
-			return c.Next()
-		}
-
-		// Skip if skip function returns true
-		if cfg.SkipFuncFiber != nil && cfg.SkipFuncFiber(c) {
-			return c.Next()
-		}
-
-		start := time.Now()
-
-		// Handle request ID
-		requestID := c.Get(cfg.RequestIDHeader)
-		if requestID == "" && cfg.IncludeRequestID {
-			if cfg.GenerateRequestID != nil {
-				requestID = cfg.GenerateRequestID()
-			} else {
-				requestID = generateUUID()
-			}
-			c.Request().Header.Set(cfg.RequestIDHeader, requestID)
-		}
-
-		// Set request ID in response header
-		if cfg.IncludeRequestID && requestID != "" {
-			c.Set(cfg.RequestIDHeader, requestID)
-		}
-
-		// Store request ID in locals
-		if requestID != "" {
-			c.Locals(fiberRequestIDKey, requestID)
-		}
-
-		// Store logger in locals
-		c.Locals(fiberLoggerKey, cfg.Logger)
-
-		// Process request
-		err := c.Next()
-
-		// Calculate latency
-		latency := time.Since(start)
-
-		// Get status code
-		status := c.Response().StatusCode()
-
-		// Determine log level based on status code
-		var logLevel Level
-		switch {
-		case status >= 500:
-			logLevel = cfg.ErrorLevel
-		case status >= 400:
-			logLevel = cfg.WarnLevel
-		default:
-			logLevel = cfg.LogLevel
-		}
-
-		// Build log event
-		zl := cfg.Logger.Zerolog()
-		event := zl.WithLevel(logLevel.ToZerolog())
-
-		// Add standard fields
-		event = event.
-			Str("method", c.Method()).
-			Str("path", c.Path()).
-			Int("status", status).
-			Str("ip", getClientIPFiber(c, cfg.TrustedProxies)).
-			Str("user_agent", c.Get("User-Agent"))
-
-		// Add request ID
-		if cfg.IncludeRequestID && requestID != "" {
-			event = event.Str("request_id", requestID)
-		}
-
-		// Add latency
-		if cfg.IncludeLatency {
-			event = event.Dur("latency", latency)
-		}
-
-		// Add query parameters (with sensitive keys redacted)
-		if cfg.IncludeQuery {
-			query := c.Request().URI().QueryString()
-			if len(query) > 0 {
-				event = event.Str("query", redactQuery(string(query), sensitiveQueryKeysFiber))
-			}
-		}
-
-		// Add headers
-		if cfg.IncludeHeaders {
-			headers := make(map[string]string)
-			for key, value := range c.Request().Header.All() {
-				headerName := string(key)
-				if sensitiveHeaderMap[strings.ToLower(headerName)] {
-					headers[headerName] = "[REDACTED]"
-				} else {
-					headers[headerName] = string(value)
-				}
-			}
-			event = event.Interface("headers", headers)
-		}
-
-		// Add request body if enabled
-		if cfg.IncludeBody {
-			body := c.Body()
-			truncated := false
-			if len(body) > cfg.MaxBodySize {
-				body = body[:cfg.MaxBodySize]
-				truncated = true
-			}
-			if len(body) > 0 {
-				logged := string(body)
-				if !cfg.DisableBodyRedaction {
-					logged = redactBody(c.Get("Content-Type"), body, sensitiveBodyFieldsFiber)
-				}
-				if truncated {
-					logged += "...[truncated]"
-				}
-				event = event.Str("request_body", logged)
-			}
-		}
-
-		// Add custom fields
-		if cfg.CustomFieldsFiber != nil {
-			for key, value := range cfg.CustomFieldsFiber(c) {
-				event = event.Interface(key, value)
-			}
-		}
-
-		// Add error if present
-		if err != nil {
-			event = event.Err(err)
-		}
-
-		// Send log
-		event.Msg("HTTP request")
-
-		return err
-	}
-}
-
-// LoggerFromFiberCtx extracts the logger from Fiber context.
-func LoggerFromFiberCtx(c fiber.Ctx) *Logger {
-	if l, ok := c.Locals(fiberLoggerKey).(*Logger); ok {
-		return l
-	}
-	return defaultLogger
-}
-
-// RequestIDFromFiberCtx extracts the request ID from Fiber context.
-func RequestIDFromFiberCtx(c fiber.Ctx) string {
-	if id, ok := c.Locals(fiberRequestIDKey).(string); ok {
-		return id
-	}
-	return ""
-}
-
-// CtxFiber returns a zerolog.Logger enriched with Fiber context values.
-func CtxFiber(c fiber.Ctx) *zerolog.Logger {
-	l := LoggerFromFiberCtx(c)
-	logger := l.Zerolog()
-
-	if requestID := RequestIDFromFiberCtx(c); requestID != "" {
-		logger = logger.With().Str("request_id", requestID).Logger()
-	}
-
-	return &logger
-}
-
 // generateUUID generates a UUID v4 using crypto/rand (via google/uuid).
-func generateUUID() string {
+// NewRequestID returns the request id this package puts on log lines and in
+// the X-Request-ID header. Exported for framework adapters.
+//
+// Named NewRequestID rather than GenerateRequestID because MiddlewareConfig
+// already has a GenerateRequestID field -- the caller's override -- and two
+// spellings of the same idea one dot apart is how you end up calling the
+// wrong one.
+func NewRequestID() string {
 	return uuid.New().String()
 }

@@ -5,8 +5,6 @@ import (
 	"net"
 	"net/http"
 	"strings"
-
-	"github.com/gofiber/fiber/v3"
 )
 
 // LevelHandlerConfig configures the log level HTTP endpoint.
@@ -33,10 +31,6 @@ type LevelHandlerConfig struct {
 	// AuthFunc is a custom authentication function.
 	// Returns true if the request is authenticated.
 	AuthFunc func(r *http.Request) bool
-
-	// AuthFuncFiber is a custom authentication function for Fiber.
-	// Returns true if the request is authenticated.
-	AuthFuncFiber func(c fiber.Ctx) bool
 
 	// MaxBodyBytes limits the request body size for PUT/POST (default 4096).
 	// Requests larger than this return 413 Request Entity Too Large.
@@ -75,55 +69,22 @@ func LevelHandler(cfg LevelHandlerConfig) http.Handler {
 			http.Error(w, "AuthFunc is required when RequireAuth is enabled", http.StatusInternalServerError)
 			return
 		}
-		// Check authentication
-		if cfg.RequireAuth {
-			if !cfg.AuthFunc(r) {
-				http.Error(w, "Unauthorized", http.StatusUnauthorized)
-				return
-			}
-		}
 
-		// Check allowed IPs
-		if len(cfg.AllowedIPs) > 0 {
-			clientIP := getClientIPStd(r, cfg.TrustedProxies)
-			allowed := false
-			for _, ip := range cfg.AllowedIPs {
-				if ip == clientIP {
-					allowed = true
-					break
-				}
-			}
-			if !allowed {
-				http.Error(w, "Forbidden", http.StatusForbidden)
-				return
-			}
-		}
-
-		logger := cfg.Logger
-		if logger == nil {
-			logger = defaultLogger
+		authenticated := !cfg.RequireAuth || cfg.AuthFunc(r)
+		if denied := cfg.Authorize(RequestSource(r), authenticated); denied != nil {
+			http.Error(w, denied.Error, denied.StatusCode)
+			return
 		}
 
 		w.Header().Set("Content-Type", "application/json")
 
+		var outcome LevelOutcome
 		switch r.Method {
 		case http.MethodGet:
-			// Return current level
-			resp := LevelResponse{
-				Level:       logger.GetLevel().String(),
-				ValidLevels: ValidLevelStrings(),
-			}
-			if err := json.NewEncoder(w).Encode(resp); err != nil {
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				return
-			}
+			outcome = cfg.CurrentLevel()
 
 		case http.MethodPut, http.MethodPost:
-			maxBody := cfg.MaxBodyBytes
-			if maxBody <= 0 {
-				maxBody = DefaultLevelMaxBodyBytes
-			}
-			r.Body = http.MaxBytesReader(w, r.Body, maxBody)
+			r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxBody())
 
 			var req LevelRequest
 			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
@@ -133,48 +94,18 @@ func LevelHandler(cfg LevelHandlerConfig) http.Handler {
 				}
 				req.Level = r.URL.Query().Get("level")
 			}
-
-			if req.Level == "" {
-				w.WriteHeader(http.StatusBadRequest)
-				resp := LevelResponse{
-					Message:     "level is required",
-					ValidLevels: ValidLevelStrings(),
-				}
-				if encErr := json.NewEncoder(w).Encode(resp); encErr != nil {
-					http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				}
-				return
-			}
-
-			// Parse and set level
-			newLevel, err := ParseLevel(req.Level)
-			if err != nil {
-				w.WriteHeader(http.StatusBadRequest)
-				resp := LevelResponse{
-					Message:     err.Error(),
-					ValidLevels: ValidLevelStrings(),
-				}
-				if encErr := json.NewEncoder(w).Encode(resp); encErr != nil {
-					http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				}
-				return
-			}
-
-			previousLevel := logger.GetLevel().String()
-			logger.SetLevel(newLevel)
-
-			resp := LevelResponse{
-				Level:         newLevel.String(),
-				PreviousLevel: previousLevel,
-				Message:       "log level updated successfully",
-			}
-			if err := json.NewEncoder(w).Encode(resp); err != nil {
-				http.Error(w, "Internal Server Error", http.StatusInternalServerError)
-				return
-			}
+			outcome = cfg.ApplyLevel(req.Level)
 
 		default:
 			http.Error(w, "Method Not Allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		if outcome.StatusCode != http.StatusOK {
+			w.WriteHeader(outcome.StatusCode)
+		}
+		if err := json.NewEncoder(w).Encode(outcome.Body); err != nil {
+			http.Error(w, "Internal Server Error", http.StatusInternalServerError)
 		}
 	})
 }
@@ -182,108 +113,6 @@ func LevelHandler(cfg LevelHandlerConfig) http.Handler {
 // LevelHandlerFunc is a convenience function that returns an http.HandlerFunc.
 func LevelHandlerFunc(cfg LevelHandlerConfig) http.HandlerFunc {
 	return LevelHandler(cfg).ServeHTTP
-}
-
-// LevelHandlerFiber returns a Fiber handler for managing log levels.
-// GET: Returns the current log level.
-// PUT/POST: Sets a new log level.
-func LevelHandlerFiber(cfg LevelHandlerConfig) fiber.Handler {
-	return func(c fiber.Ctx) error {
-		if cfg.RequireAuth && cfg.AuthFuncFiber == nil {
-			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
-				"error": "AuthFuncFiber is required when RequireAuth is enabled",
-			})
-		}
-		// Check authentication
-		if cfg.RequireAuth {
-			if !cfg.AuthFuncFiber(c) {
-				return c.Status(fiber.StatusUnauthorized).JSON(fiber.Map{
-					"error": "Unauthorized",
-				})
-			}
-		}
-
-		// Check allowed IPs
-		if len(cfg.AllowedIPs) > 0 {
-			clientIP := getClientIPFiber(c, cfg.TrustedProxies)
-			allowed := false
-			for _, ip := range cfg.AllowedIPs {
-				if ip == clientIP {
-					allowed = true
-					break
-				}
-			}
-			if !allowed {
-				return c.Status(fiber.StatusForbidden).JSON(fiber.Map{
-					"error": "Forbidden",
-				})
-			}
-		}
-
-		logger := cfg.Logger
-		if logger == nil {
-			logger = defaultLogger
-		}
-
-		switch c.Method() {
-		case fiber.MethodGet:
-			// Return current level
-			return c.JSON(LevelResponse{
-				Level:       logger.GetLevel().String(),
-				ValidLevels: ValidLevelStrings(),
-			})
-
-		case fiber.MethodPut, fiber.MethodPost:
-			maxBody := cfg.MaxBodyBytes
-			if maxBody <= 0 {
-				maxBody = DefaultLevelMaxBodyBytes
-			}
-			body := c.Body()
-			if len(body) > int(maxBody) {
-				return c.Status(fiber.StatusRequestEntityTooLarge).JSON(fiber.Map{
-					"error": "Request Entity Too Large",
-				})
-			}
-
-			var req LevelRequest
-			if len(body) > 0 {
-				_ = json.Unmarshal(body, &req)
-			}
-			if req.Level == "" {
-				req.Level = c.Query("level")
-			}
-
-			if req.Level == "" {
-				return c.Status(fiber.StatusBadRequest).JSON(LevelResponse{
-					Message:     "level is required",
-					ValidLevels: ValidLevelStrings(),
-				})
-			}
-
-			// Parse and set level
-			newLevel, err := ParseLevel(req.Level)
-			if err != nil {
-				return c.Status(fiber.StatusBadRequest).JSON(LevelResponse{
-					Message:     err.Error(),
-					ValidLevels: ValidLevelStrings(),
-				})
-			}
-
-			previousLevel := logger.GetLevel().String()
-			logger.SetLevel(newLevel)
-
-			return c.JSON(LevelResponse{
-				Level:         newLevel.String(),
-				PreviousLevel: previousLevel,
-				Message:       "log level updated successfully",
-			})
-
-		default:
-			return c.Status(fiber.StatusMethodNotAllowed).JSON(fiber.Map{
-				"error": "Method Not Allowed",
-			})
-		}
-	}
 }
 
 // remoteIPFromAddr extracts the IP from "host:port" or "[host]:port" (IPv6).
@@ -337,56 +166,149 @@ func isRequestBodyTooLarge(err error) bool {
 	return err != nil && strings.Contains(err.Error(), "request body too large")
 }
 
-// getClientIPStd extracts client IP from standard http.Request.
-// When trustedProxies is nil or empty, proxy headers (X-Forwarded-For, X-Real-IP) are
-// not trusted and only RemoteAddr is used. When trustedProxies is set, proxy headers
-// are only used when the direct peer (RemoteAddr) is in the trusted list.
-func getClientIPStd(r *http.Request, trustedProxies []string) string {
-	directIP := remoteIPFromAddr(r.RemoteAddr)
+// ClientIPSource is the minimal view of a request needed to resolve a client
+// IP. Implementing it is all a framework adapter has to do -- see the
+// fiberadapter subpackage.
+type ClientIPSource interface {
+	// RemoteAddr is the direct peer address, "host:port" or "[host]:port".
+	RemoteAddr() string
+	// Header returns a request header, or "" when absent.
+	Header(name string) string
+}
+
+// ClientIP resolves the client IP under the trusted-proxy rule: X-Forwarded-For
+// then X-Real-IP, but only when the direct peer is itself in trustedProxies.
+// With an empty list the proxy headers are never trusted, which is what keeps
+// AllowedIPs from being spoofable.
+//
+// Exported, and taking an interface, so the rule has exactly one
+// implementation. It used to have two -- one per framework -- and a
+// trusted-proxy rule that disagrees with itself across frameworks is an
+// AllowedIPs bypass, not a cosmetic difference.
+func ClientIP(src ClientIPSource, trustedProxies []string) string {
+	directIP := remoteIPFromAddr(src.RemoteAddr())
 	if len(trustedProxies) == 0 || !isIPInTrustedList(directIP, trustedProxies) {
 		return directIP
 	}
-	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
+	if xff := src.Header("X-Forwarded-For"); xff != "" {
 		ips := strings.Split(xff, ",")
 		if len(ips) > 0 {
 			return strings.TrimSpace(ips[0])
 		}
 	}
-	if xri := r.Header.Get("X-Real-IP"); xri != "" {
+	if xri := src.Header("X-Real-IP"); xri != "" {
 		return strings.TrimSpace(xri)
 	}
 	return directIP
 }
 
-// getClientIPFiber extracts client IP from Fiber context with the same trusted-proxy
-// semantics as getClientIPStd. When trustedProxies is empty, only the direct peer is used.
-func getClientIPFiber(c fiber.Ctx, trustedProxies []string) string {
-	addr := c.RequestCtx().RemoteAddr().String()
-	directIP := remoteIPFromAddr(addr)
-	if len(trustedProxies) == 0 || !isIPInTrustedList(directIP, trustedProxies) {
-		return directIP
+// RequestSource adapts an *http.Request to ClientIPSource.
+func RequestSource(r *http.Request) ClientIPSource { return stdSource{r: r} }
+
+type stdSource struct{ r *http.Request }
+
+func (s stdSource) RemoteAddr() string        { return s.r.RemoteAddr }
+func (s stdSource) Header(name string) string { return s.r.Header.Get(name) }
+
+// LevelOutcome is what the level endpoint should return, computed without
+// reference to any web framework.
+type LevelOutcome struct {
+	// StatusCode is the HTTP status to send.
+	StatusCode int
+
+	// Body, when non-nil, is the LevelResponse to serialize as JSON.
+	Body *LevelResponse
+
+	// Error, when non-empty, is a plain message. Each adapter renders it the
+	// way it always has -- LevelHandler as text/plain, the Fiber handler as
+	// {"error": ...} -- and this change deliberately does not unify them.
+	Error string
+}
+
+// Authorize applies the level endpoint's access checks: the caller's auth
+// result (ignored when RequireAuth is false) and the AllowedIPs list. It
+// returns nil when the request may proceed.
+//
+// The auth *function* stays with the caller: its signature is
+// framework-specific, and so is the message for a missing one.
+func (cfg LevelHandlerConfig) Authorize(src ClientIPSource, authenticated bool) *LevelOutcome {
+	if cfg.RequireAuth && !authenticated {
+		return &LevelOutcome{StatusCode: http.StatusUnauthorized, Error: "Unauthorized"}
 	}
-	if xff := c.Get("X-Forwarded-For"); xff != "" {
-		ips := strings.Split(xff, ",")
-		if len(ips) > 0 {
-			return strings.TrimSpace(ips[0])
+
+	if len(cfg.AllowedIPs) > 0 {
+		clientIP := ClientIP(src, cfg.TrustedProxies)
+		for _, ip := range cfg.AllowedIPs {
+			if ip == clientIP {
+				return nil
+			}
+		}
+		return &LevelOutcome{StatusCode: http.StatusForbidden, Error: "Forbidden"}
+	}
+
+	return nil
+}
+
+// CurrentLevel is the GET response: the level in force and the valid names.
+func (cfg LevelHandlerConfig) CurrentLevel() LevelOutcome {
+	return LevelOutcome{
+		StatusCode: http.StatusOK,
+		Body: &LevelResponse{
+			Level:       cfg.logger().GetLevel().String(),
+			ValidLevels: ValidLevelStrings(),
+		},
+	}
+}
+
+// ApplyLevel is the PUT/POST response: it validates name, and on success sets
+// the level and reports what it was before. An empty or unparseable name is a
+// 400 carrying the valid names, not an error string.
+func (cfg LevelHandlerConfig) ApplyLevel(name string) LevelOutcome {
+	if name == "" {
+		return LevelOutcome{
+			StatusCode: http.StatusBadRequest,
+			Body:       &LevelResponse{Message: "level is required", ValidLevels: ValidLevelStrings()},
 		}
 	}
-	if xri := c.Get("X-Real-IP"); xri != "" {
-		return strings.TrimSpace(xri)
+
+	newLevel, err := ParseLevel(name)
+	if err != nil {
+		return LevelOutcome{
+			StatusCode: http.StatusBadRequest,
+			Body:       &LevelResponse{Message: err.Error(), ValidLevels: ValidLevelStrings()},
+		}
 	}
-	return directIP
+
+	logger := cfg.logger()
+	previousLevel := logger.GetLevel().String()
+	logger.SetLevel(newLevel)
+
+	return LevelOutcome{
+		StatusCode: http.StatusOK,
+		Body: &LevelResponse{
+			Level:         newLevel.String(),
+			PreviousLevel: previousLevel,
+			Message:       "log level updated successfully",
+		},
+	}
+}
+
+// MaxBody is the configured request-body limit for PUT/POST, or the default.
+func (cfg LevelHandlerConfig) MaxBody() int64 {
+	if cfg.MaxBodyBytes <= 0 {
+		return DefaultLevelMaxBodyBytes
+	}
+	return cfg.MaxBodyBytes
+}
+
+func (cfg LevelHandlerConfig) logger() *Logger {
+	if cfg.Logger == nil {
+		return defaultLogger
+	}
+	return cfg.Logger
 }
 
 // RegisterLevelEndpoint registers the log level endpoint on a standard ServeMux.
 func RegisterLevelEndpoint(mux *http.ServeMux, path string, cfg LevelHandlerConfig) {
 	mux.Handle(path, LevelHandler(cfg))
-}
-
-// RegisterLevelEndpointFiber registers the log level endpoint on a Fiber app.
-func RegisterLevelEndpointFiber(app *fiber.App, path string, cfg LevelHandlerConfig) {
-	handler := LevelHandlerFiber(cfg)
-	app.Get(path, handler)
-	app.Put(path, handler)
-	app.Post(path, handler)
 }

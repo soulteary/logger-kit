@@ -29,7 +29,9 @@ var defaultSensitiveBodyFields = []string{
 // JSON objects and form-encoded bodies are redacted field by field. A body in
 // any other format cannot be redacted field-wise, so it is replaced wholesale
 // rather than logged raw.
-func redactBody(contentType string, body []byte, fields []string) string {
+// RedactBody masks the named fields in a request/response body before it is
+// logged. Exported so a framework adapter redacts by the same rule.
+func RedactBody(contentType string, body []byte, fields []string) string {
 	if len(body) == 0 {
 		return ""
 	}
