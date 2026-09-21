@@ -258,7 +258,7 @@ func LevelHandler(cfg LevelHandlerConfig) fiber.Handler {
 		}
 
 		authenticated := !cfg.RequireAuth || cfg.AuthFunc(c)
-		if denied := cfg.LevelHandlerConfig.Authorize(Source{C: c}, authenticated); denied != nil {
+		if denied := cfg.Authorize(Source{C: c}, authenticated); denied != nil {
 			// JSON, as this handler has always answered; logger.LevelHandler
 			// answers text/plain here. See logger.LevelOutcome.
 			return c.Status(denied.StatusCode).JSON(fiber.Map{"error": denied.Error})
