@@ -19,7 +19,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	logkit "github.com/soulteary/logger-kit/v2"
+	logkit "github.com/soulteary/logger-kit/v3"
 )
 
 // fakeSource is the minimal ClientIPSource an adapter would write.

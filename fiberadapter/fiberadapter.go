@@ -18,7 +18,7 @@ import (
 	"github.com/gofiber/fiber/v3"
 	"github.com/rs/zerolog"
 
-	logger "github.com/soulteary/logger-kit/v2"
+	logger "github.com/soulteary/logger-kit/v3"
 )
 
 // Source adapts a fiber.Ctx to logger.ClientIPSource.
