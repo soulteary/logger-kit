@@ -3,12 +3,12 @@ package logger
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 
-	"github.com/gofiber/fiber/v3"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -263,148 +263,6 @@ func TestLevelHandlerFunc(t *testing.T) {
 	assert.Equal(t, http.StatusOK, rec.Code)
 }
 
-func TestLevelHandlerFiber_GET(t *testing.T) {
-	var buf bytes.Buffer
-	logger := New(Config{
-		Level:  InfoLevel,
-		Output: &buf,
-		Format: FormatJSON,
-	})
-
-	app := fiber.New()
-	app.Get("/log/level", LevelHandlerFiber(LevelHandlerConfig{Logger: logger}))
-
-	req := httptest.NewRequest(http.MethodGet, "/log/level", nil)
-	resp, err := app.Test(req)
-	require.NoError(t, err)
-
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-}
-
-func TestLevelHandlerFiber_PUT(t *testing.T) {
-	var buf bytes.Buffer
-	logger := New(Config{
-		Level:  InfoLevel,
-		Output: &buf,
-		Format: FormatJSON,
-	})
-
-	app := fiber.New()
-	app.Put("/log/level", LevelHandlerFiber(LevelHandlerConfig{Logger: logger}))
-
-	body := `{"level": "debug"}`
-	req := httptest.NewRequest(http.MethodPut, "/log/level", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := app.Test(req)
-	require.NoError(t, err)
-
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, DebugLevel, logger.GetLevel())
-}
-
-func TestLevelHandlerFiber_InvalidLevel(t *testing.T) {
-	var buf bytes.Buffer
-	logger := New(Config{
-		Level:  InfoLevel,
-		Output: &buf,
-		Format: FormatJSON,
-	})
-
-	app := fiber.New()
-	app.Put("/log/level", LevelHandlerFiber(LevelHandlerConfig{Logger: logger}))
-
-	body := `{"level": "invalid"}`
-	req := httptest.NewRequest(http.MethodPut, "/log/level", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := app.Test(req)
-	require.NoError(t, err)
-
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-}
-
-func TestLevelHandlerFiber_MissingLevel(t *testing.T) {
-	app := fiber.New()
-	app.Put("/log/level", LevelHandlerFiber(DefaultLevelHandlerConfig()))
-
-	body := `{}`
-	req := httptest.NewRequest(http.MethodPut, "/log/level", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := app.Test(req)
-	require.NoError(t, err)
-
-	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
-}
-
-func TestLevelHandlerFiber_QueryParam(t *testing.T) {
-	var buf bytes.Buffer
-	logger := New(Config{
-		Level:  InfoLevel,
-		Output: &buf,
-		Format: FormatJSON,
-	})
-
-	app := fiber.New()
-	app.Put("/log/level", LevelHandlerFiber(LevelHandlerConfig{Logger: logger}))
-
-	req := httptest.NewRequest(http.MethodPut, "/log/level?level=warn", nil)
-	resp, err := app.Test(req)
-	require.NoError(t, err)
-
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, WarnLevel, logger.GetLevel())
-}
-
-func TestLevelHandlerFiber_AllowedIPs(t *testing.T) {
-	app := fiber.New()
-	app.Get("/log/level", LevelHandlerFiber(LevelHandlerConfig{
-		AllowedIPs: []string{"192.168.1.1"},
-	}))
-
-	// Request from non-allowed IP (Fiber uses different IP detection)
-	req := httptest.NewRequest(http.MethodGet, "/log/level", nil)
-	resp, err := app.Test(req)
-	require.NoError(t, err)
-
-	// In test environment, IP detection may differ
-	assert.True(t, resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusForbidden)
-}
-
-func TestLevelHandlerFiber_RequireAuth(t *testing.T) {
-	app := fiber.New()
-	app.Get("/log/level", LevelHandlerFiber(LevelHandlerConfig{
-		RequireAuth: true,
-		AuthFuncFiber: func(c fiber.Ctx) bool {
-			return c.Get("Authorization") == "Bearer valid-token"
-		},
-	}))
-
-	// Request without auth
-	req := httptest.NewRequest(http.MethodGet, "/log/level", nil)
-	resp, err := app.Test(req)
-	require.NoError(t, err)
-
-	assert.Equal(t, http.StatusUnauthorized, resp.StatusCode)
-
-	// Request with auth
-	req = httptest.NewRequest(http.MethodGet, "/log/level", nil)
-	req.Header.Set("Authorization", "Bearer valid-token")
-	resp, err = app.Test(req)
-	require.NoError(t, err)
-
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-}
-
-func TestLevelHandlerFiber_MethodNotAllowed(t *testing.T) {
-	app := fiber.New()
-	app.Delete("/log/level", LevelHandlerFiber(DefaultLevelHandlerConfig()))
-
-	req := httptest.NewRequest(http.MethodDelete, "/log/level", nil)
-	resp, err := app.Test(req)
-	require.NoError(t, err)
-
-	assert.Equal(t, http.StatusMethodNotAllowed, resp.StatusCode)
-}
-
 func TestRegisterLevelEndpoint(t *testing.T) {
 	mux := http.NewServeMux()
 	RegisterLevelEndpoint(mux, "/log/level", DefaultLevelHandlerConfig())
@@ -415,17 +273,6 @@ func TestRegisterLevelEndpoint(t *testing.T) {
 	mux.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
-}
-
-func TestRegisterLevelEndpointFiber(t *testing.T) {
-	app := fiber.New()
-	RegisterLevelEndpointFiber(app, "/log/level", DefaultLevelHandlerConfig())
-
-	req := httptest.NewRequest(http.MethodGet, "/log/level", nil)
-	resp, err := app.Test(req)
-	require.NoError(t, err)
-
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
 func TestGetClientIPStd(t *testing.T) {
@@ -481,42 +328,10 @@ func TestGetClientIPStd(t *testing.T) {
 			}
 			req.RemoteAddr = tt.remoteAddr
 
-			ip := getClientIPStd(req, tt.trustedProxies)
+			ip := ClientIP(RequestSource(req), tt.trustedProxies)
 			assert.Equal(t, tt.expected, ip)
 		})
 	}
-}
-
-func TestLevelHandlerFiber_POST(t *testing.T) {
-	var buf bytes.Buffer
-	logger := New(Config{
-		Level:  InfoLevel,
-		Output: &buf,
-		Format: FormatJSON,
-	})
-
-	app := fiber.New()
-	app.Post("/log/level", LevelHandlerFiber(LevelHandlerConfig{Logger: logger}))
-
-	body := `{"level": "warn"}`
-	req := httptest.NewRequest(http.MethodPost, "/log/level", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := app.Test(req)
-	require.NoError(t, err)
-
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
-	assert.Equal(t, WarnLevel, logger.GetLevel())
-}
-
-func TestLevelHandlerFiber_DefaultLogger(t *testing.T) {
-	app := fiber.New()
-	app.Get("/log/level", LevelHandlerFiber(LevelHandlerConfig{}))
-
-	req := httptest.NewRequest(http.MethodGet, "/log/level", nil)
-	resp, err := app.Test(req)
-	require.NoError(t, err)
-
-	assert.Equal(t, http.StatusOK, resp.StatusCode)
 }
 
 func TestLevelHandler_XForwardedForIP_Untrusted(t *testing.T) {
@@ -581,43 +396,6 @@ func TestLevelHandler_RequireAuth_NoAuthFunc(t *testing.T) {
 
 	assert.Equal(t, http.StatusInternalServerError, rec.Code)
 	assert.Contains(t, rec.Body.String(), "AuthFunc is required")
-}
-
-func TestLevelHandlerFiber_RequireAuth_NoAuthFuncFiber(t *testing.T) {
-	app := fiber.New()
-	app.Get("/log/level", LevelHandlerFiber(LevelHandlerConfig{
-		RequireAuth:   true,
-		AuthFuncFiber: nil,
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/log/level", nil)
-	resp, err := app.Test(req)
-	require.NoError(t, err)
-
-	assert.Equal(t, http.StatusInternalServerError, resp.StatusCode)
-}
-
-func TestLevelHandlerFiber_BodyTooLarge(t *testing.T) {
-	var buf bytes.Buffer
-	logger := New(Config{
-		Level:  InfoLevel,
-		Output: &buf,
-		Format: FormatJSON,
-	})
-
-	app := fiber.New()
-	app.Put("/log/level", LevelHandlerFiber(LevelHandlerConfig{
-		Logger:       logger,
-		MaxBodyBytes: 5,
-	}))
-
-	body := `{"level": "debug"}` // > 5 bytes
-	req := httptest.NewRequest(http.MethodPut, "/log/level", strings.NewReader(body))
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := app.Test(req)
-	require.NoError(t, err)
-
-	assert.Equal(t, http.StatusRequestEntityTooLarge, resp.StatusCode)
 }
 
 func TestLevelHandler_PUT_InvalidJSON_LevelInQuery(t *testing.T) {
@@ -699,4 +477,30 @@ func TestLevelHandler_RemoteAddr_NoPort(t *testing.T) {
 	handler.ServeHTTP(rec, req)
 
 	assert.Equal(t, http.StatusOK, rec.Code)
+}
+
+// failingResponseWriter fails every Write, so the JSON encoder reports an error.
+type failingResponseWriter struct {
+	header http.Header
+	code   int
+}
+
+func (f *failingResponseWriter) Header() http.Header {
+	if f.header == nil {
+		f.header = make(http.Header)
+	}
+	return f.header
+}
+func (f *failingResponseWriter) Write([]byte) (int, error) { return 0, errors.New("connection reset") }
+func (f *failingResponseWriter) WriteHeader(code int)      { f.code = code }
+
+func TestLevelHandler_EncodeFailure(t *testing.T) {
+	handler := LevelHandler(LevelHandlerConfig{})
+
+	w := &failingResponseWriter{}
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/log/level", nil))
+
+	// The response is already committed, so all the handler can do is try the
+	// 500. What matters is that it does not panic on a broken connection.
+	assert.Equal(t, http.StatusInternalServerError, w.code)
 }

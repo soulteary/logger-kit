@@ -15,7 +15,7 @@ import (
 func TestRedactBodyJSON(t *testing.T) {
 	body := []byte(`{"email":"a@b.com","password":"hunter2","nested":{"api_key":"k-123","keep":"visible"},"list":[{"token":"t-1"}]}`)
 
-	got := redactBody("application/json", body, defaultSensitiveBodyFields)
+	got := RedactBody("application/json", body, defaultSensitiveBodyFields)
 
 	for _, secret := range []string{"hunter2", "k-123", "t-1"} {
 		if strings.Contains(got, secret) {
@@ -39,7 +39,7 @@ func TestRedactBodyJSON(t *testing.T) {
 }
 
 func TestRedactBodyForm(t *testing.T) {
-	got := redactBody("application/x-www-form-urlencoded",
+	got := RedactBody("application/x-www-form-urlencoded",
 		[]byte("username=alice&password=hunter2&remember=1"), defaultSensitiveBodyFields)
 
 	if strings.Contains(got, "hunter2") {
@@ -54,7 +54,7 @@ func TestRedactBodyForm(t *testing.T) {
 // not be logged raw either.
 func TestRedactBodyUnstructured(t *testing.T) {
 	for _, ct := range []string{"application/octet-stream", "text/plain", "multipart/form-data; boundary=x"} {
-		got := redactBody(ct, []byte("password=hunter2 raw payload"), defaultSensitiveBodyFields)
+		got := RedactBody(ct, []byte("password=hunter2 raw payload"), defaultSensitiveBodyFields)
 		if strings.Contains(got, "hunter2") {
 			t.Errorf("content type %q was logged raw: %s", ct, got)
 		}
@@ -63,7 +63,7 @@ func TestRedactBodyUnstructured(t *testing.T) {
 		}
 	}
 
-	if got := redactBody("application/json", []byte("{not json"), defaultSensitiveBodyFields); strings.Contains(got, "not json") {
+	if got := RedactBody("application/json", []byte("{not json"), defaultSensitiveBodyFields); strings.Contains(got, "not json") {
 		t.Errorf("unparseable JSON was logged raw: %s", got)
 	}
 }

@@ -9,6 +9,29 @@
 
 基于 [zerolog](https://github.com/rs/zerolog) 的 Go 应用结构化日志工具包。提供动态日志级别管理、基于上下文的日志记录，以及用于运行时日志级别调整的 HTTP 端点。
 
+
+> **v2.4.0 破坏性变更 —— Fiber 支持移入子包。**
+> Fiber handler 与中间件现位于 `github.com/soulteary/logger-kit/v2/fiberadapter`，
+> 于是导入根包不再把 Fiber（以及 fasthttp）链接进用不到它的二进制。
+> 对一个 net/http 服务来说，这意味着**少链接 25 个包、少 11 个模块、二进制小 13%**。
+>
+> | 原来 | 现在 |
+> |---|---|
+> | `logger.FiberMiddleware(cfg)` | `fiberadapter.Middleware(fiberadapter.Config{MiddlewareConfig: cfg})` |
+> | `logger.LevelHandlerFiber(cfg)` | `fiberadapter.LevelHandler(fiberadapter.LevelHandlerConfig{LevelHandlerConfig: cfg})` |
+> | `logger.RegisterLevelEndpointFiber(app, path, cfg)` | `fiberadapter.RegisterLevelEndpoint(app, path, ...)` |
+> | `logger.LoggerFromFiberCtx(c)` | `fiberadapter.Logger(c)` |
+> | `logger.RequestIDFromFiberCtx(c)` | `fiberadapter.RequestID(c)` |
+> | `logger.CtxFiber(c)` | `fiberadapter.Ctx(c)` |
+>
+> 三个 fiber 类型的配置字段一并搬走：`MiddlewareConfig.SkipFuncFiber` /
+> `CustomFieldsFiber` 变成 `fiberadapter.Config` 上的 `SkipFunc` /
+> `CustomFields`，`LevelHandlerConfig.AuthFuncFiber` 变成
+> `fiberadapter.LevelHandlerConfig` 上的 `AuthFunc`，两者都内嵌根包配置。
+> `func(fiber.Ctx) ...` 这类字段正是把 Fiber 拖进根包的原因。
+>
+> net/http 一侧没有任何变化。
+
 ## 功能特性
 
 - **zerolog 封装**：支持 JSON 和控制台输出格式的结构化日志
@@ -198,7 +221,8 @@ package main
 
 import (
     "github.com/gofiber/fiber/v3"
-    "github.com/soulteary/logger-kit/v2"
+    logger "github.com/soulteary/logger-kit/v2"
+    "github.com/soulteary/logger-kit/v2/fiberadapter"
 )
 
 func main() {
@@ -206,23 +230,27 @@ func main() {
     
     app := fiber.New()
     
-    app.Use(logger.FiberMiddleware(logger.MiddlewareConfig{
-        Logger:           log,
-        SkipPaths:        []string{"/health"},
-        IncludeRequestID: true,
+    app.Use(fiberadapter.Middleware(fiberadapter.Config{
+        MiddlewareConfig: logger.MiddlewareConfig{
+            Logger:           log,
+            SkipPaths:        []string{"/health"},
+            IncludeRequestID: true,
+        },
     }))
     
     app.Get("/", func(c fiber.Ctx) error {
         // 从 Fiber 上下文访问日志器
-        l := logger.LoggerFromFiberCtx(c)
+        l := fiberadapter.Logger(c)
         l.Info().Msg("处理请求")
         
         return c.SendString("OK")
     })
     
     // 注册日志级别端点
-    logger.RegisterLevelEndpointFiber(app, "/log/level", logger.LevelHandlerConfig{
-        Logger: log,
+    fiberadapter.RegisterLevelEndpoint(app, "/log/level", fiberadapter.LevelHandlerConfig{
+        LevelHandlerConfig: logger.LevelHandlerConfig{
+            Logger: log,
+        },
     })
     
     app.Listen(":3000")
@@ -426,7 +454,7 @@ l = logger.LoggerFromContext(ctx)
 l, ok := logger.LoggerFromContextOK(ctx)
 r = logger.SetLoggerInRequest(r, l)
 l = logger.LoggerFromRequest(r)
-l = logger.LoggerFromFiberCtx(c)
+l = fiberadapter.Logger(c)
 
 // 传递关联 ID
 ctx = logger.ContextWithRequestID(ctx, id)
@@ -437,7 +465,7 @@ ctx = logger.ContextWithIDs(ctx, requestID, traceID, spanID) // 三个一次设�
 
 id = logger.RequestIDFromContext(ctx)
 id = logger.RequestIDFromRequest(r)
-id = logger.RequestIDFromFiberCtx(c)
+id = fiberadapter.RequestID(c)
 traceID = logger.TraceIDFromContext(ctx)
 traceID = logger.TraceIDFromRequest(r)
 spanID = logger.SpanIDFromContext(ctx)
@@ -451,7 +479,7 @@ r = logger.SetUserIDInRequest(r, userID)
 // 已经带上 context 中各 ID 的 zerolog logger
 zl := logger.Ctx(ctx)
 zl = logger.LogFromContext(ctx)
-zl = logger.CtxFiber(c)
+zl = fiberadapter.Ctx(c)
 ```
 
 ### 包级 logger

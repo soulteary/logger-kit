@@ -1,0 +1,305 @@
+// Package fiberadapter wires logger-kit into Fiber v3.
+//
+// It lives in its own package so that importing the root package does not drag
+// Fiber -- and with it fasthttp -- into binaries that never use it. A service
+// on net/http, Echo, Gin or chi pays nothing for Fiber support existing; only
+// importing this package links it in.
+//
+// The rules that must not differ between frameworks -- the trusted-proxy rule
+// behind ClientIP, query and body redaction, request-id generation -- live in
+// the root package and are read from there.
+package fiberadapter
+
+import (
+	"encoding/json"
+	"strings"
+	"time"
+
+	"github.com/gofiber/fiber/v3"
+	"github.com/rs/zerolog"
+
+	logger "github.com/soulteary/logger-kit/v2"
+)
+
+// Source adapts a fiber.Ctx to logger.ClientIPSource.
+type Source struct{ C fiber.Ctx }
+
+// RemoteAddr is the direct peer address.
+func (s Source) RemoteAddr() string { return s.C.RequestCtx().RemoteAddr().String() }
+
+// Header returns a request header, or "" when absent.
+func (s Source) Header(name string) string { return s.C.Get(name) }
+
+// Config is logger.MiddlewareConfig plus the Fiber-typed hooks.
+//
+// SkipFunc and CustomFields cannot live on logger.MiddlewareConfig: fields
+// typed func(fiber.Ctx) ... are exactly what pulled Fiber into the root
+// package in the first place.
+type Config struct {
+	logger.MiddlewareConfig
+
+	// SkipFunc skips logging for a request when it returns true.
+	SkipFunc func(c fiber.Ctx) bool
+
+	// CustomFields adds fields to each log entry.
+	CustomFields func(c fiber.Ctx) map[string]interface{}
+}
+
+func resolve(config ...Config) (logger.MiddlewareConfig, func(fiber.Ctx) bool, func(fiber.Ctx) map[string]interface{}) {
+	if len(config) == 0 {
+		return logger.DefaultMiddlewareConfig(), nil, nil
+	}
+	return config[0].MiddlewareConfig, config[0].SkipFunc, config[0].CustomFields
+}
+
+type fiberContextKey uint8
+
+const (
+	fiberLoggerKey fiberContextKey = iota
+	fiberRequestIDKey
+)
+
+// Middleware creates a Fiber logging middleware.
+func Middleware(config ...Config) fiber.Handler {
+	cfg, skip, custom := resolve(config...)
+	cfg = cfg.Normalized()
+	skipPathMap := cfg.SkipPathSet()
+	sensitiveHeaderMap := cfg.SensitiveHeaderSet()
+	sensitiveBodyFields := cfg.SensitiveBodyKeys()
+	sensitiveQueryKeys := cfg.SensitiveQueryKeys()
+
+	return func(c fiber.Ctx) error {
+		// Skip if path is in skip list
+		if skipPathMap[c.Path()] {
+			return c.Next()
+		}
+
+		// Skip if skip function returns true
+		if skip != nil && skip(c) {
+			return c.Next()
+		}
+
+		start := time.Now()
+
+		// Handle request ID
+		requestID := c.Get(cfg.RequestIDHeader)
+		if requestID == "" && cfg.IncludeRequestID {
+			if cfg.GenerateRequestID != nil {
+				requestID = cfg.GenerateRequestID()
+			} else {
+				requestID = logger.NewRequestID()
+			}
+			c.Request().Header.Set(cfg.RequestIDHeader, requestID)
+		}
+
+		// Set request ID in response header
+		if cfg.IncludeRequestID && requestID != "" {
+			c.Set(cfg.RequestIDHeader, requestID)
+		}
+
+		// Store request ID in locals
+		if requestID != "" {
+			c.Locals(fiberRequestIDKey, requestID)
+		}
+
+		// Store logger in locals
+		c.Locals(fiberLoggerKey, cfg.Logger)
+
+		// Process request
+		err := c.Next()
+
+		// Calculate latency
+		latency := time.Since(start)
+
+		// Get status code
+		status := c.Response().StatusCode()
+
+		// Determine log level based on status code
+		var logLevel logger.Level
+		switch {
+		case status >= 500:
+			logLevel = cfg.ErrorLevel
+		case status >= 400:
+			logLevel = cfg.WarnLevel
+		default:
+			logLevel = cfg.LogLevel
+		}
+
+		// Build log event
+		zl := cfg.Logger.Zerolog()
+		event := zl.WithLevel(logLevel.ToZerolog())
+
+		// Add standard fields
+		event = event.
+			Str("method", c.Method()).
+			Str("path", c.Path()).
+			Int("status", status).
+			Str("ip", logger.ClientIP(Source{C: c}, cfg.TrustedProxies)).
+			Str("user_agent", c.Get("User-Agent"))
+
+		// Add request ID
+		if cfg.IncludeRequestID && requestID != "" {
+			event = event.Str("request_id", requestID)
+		}
+
+		// Add latency
+		if cfg.IncludeLatency {
+			event = event.Dur("latency", latency)
+		}
+
+		// Add query parameters (with sensitive keys redacted)
+		if cfg.IncludeQuery {
+			query := c.Request().URI().QueryString()
+			if len(query) > 0 {
+				event = event.Str("query", logger.RedactQuery(string(query), sensitiveQueryKeys))
+			}
+		}
+
+		// Add headers
+		if cfg.IncludeHeaders {
+			headers := make(map[string]string)
+			for key, value := range c.Request().Header.All() {
+				headerName := string(key)
+				if sensitiveHeaderMap[strings.ToLower(headerName)] {
+					headers[headerName] = "[REDACTED]"
+				} else {
+					headers[headerName] = string(value)
+				}
+			}
+			event = event.Interface("headers", headers)
+		}
+
+		// Add request body if enabled
+		if cfg.IncludeBody {
+			body := c.Body()
+			truncated := false
+			if len(body) > cfg.MaxBodySize {
+				body = body[:cfg.MaxBodySize]
+				truncated = true
+			}
+			if len(body) > 0 {
+				logged := string(body)
+				if !cfg.DisableBodyRedaction {
+					logged = logger.RedactBody(c.Get("Content-Type"), body, sensitiveBodyFields)
+				}
+				if truncated {
+					logged += "...[truncated]"
+				}
+				event = event.Str("request_body", logged)
+			}
+		}
+
+		// Add custom fields
+		if custom != nil {
+			for key, value := range custom(c) {
+				event = event.Interface(key, value)
+			}
+		}
+
+		// Add error if present
+		if err != nil {
+			event = event.Err(err)
+		}
+
+		// Send log
+		event.Msg("HTTP request")
+
+		return err
+	}
+}
+
+// Logger extracts the logger from Fiber context.
+func Logger(c fiber.Ctx) *logger.Logger {
+	if l, ok := c.Locals(fiberLoggerKey).(*logger.Logger); ok {
+		return l
+	}
+	return logger.Default()
+}
+
+// RequestID extracts the request ID from Fiber context.
+func RequestID(c fiber.Ctx) string {
+	if id, ok := c.Locals(fiberRequestIDKey).(string); ok {
+		return id
+	}
+	return ""
+}
+
+// Ctx returns a zerolog.Logger enriched with Fiber context values.
+func Ctx(c fiber.Ctx) *zerolog.Logger {
+	l := Logger(c)
+	logger := l.Zerolog()
+
+	if requestID := RequestID(c); requestID != "" {
+		logger = logger.With().Str("request_id", requestID).Logger()
+	}
+
+	return &logger
+}
+
+// LevelHandlerConfig is logger.LevelHandlerConfig plus the Fiber-typed auth
+// hook. AuthFunc cannot live on the root config: a func(fiber.Ctx) bool field
+// is exactly what pulled Fiber into the root package.
+type LevelHandlerConfig struct {
+	logger.LevelHandlerConfig
+
+	// AuthFunc authenticates a request; required when RequireAuth is set.
+	AuthFunc func(c fiber.Ctx) bool
+}
+
+// LevelHandler returns a Fiber handler for reading and changing the log level.
+// GET returns the current level; PUT/POST set a new one.
+// It is the Fiber counterpart of logger.LevelHandler.
+func LevelHandler(cfg LevelHandlerConfig) fiber.Handler {
+	return func(c fiber.Ctx) error {
+		if cfg.RequireAuth && cfg.AuthFunc == nil {
+			return c.Status(fiber.StatusInternalServerError).JSON(fiber.Map{
+				"error": "AuthFunc is required when RequireAuth is enabled",
+			})
+		}
+
+		authenticated := !cfg.RequireAuth || cfg.AuthFunc(c)
+		if denied := cfg.Authorize(Source{C: c}, authenticated); denied != nil {
+			// JSON, as this handler has always answered; logger.LevelHandler
+			// answers text/plain here. See logger.LevelOutcome.
+			return c.Status(denied.StatusCode).JSON(fiber.Map{"error": denied.Error})
+		}
+
+		switch c.Method() {
+		case fiber.MethodGet:
+			return c.JSON(cfg.CurrentLevel().Body)
+
+		case fiber.MethodPut, fiber.MethodPost:
+			body := c.Body()
+			if int64(len(body)) > cfg.MaxBody() {
+				return c.Status(fiber.StatusRequestEntityTooLarge).JSON(fiber.Map{
+					"error": "Request Entity Too Large",
+				})
+			}
+
+			var req logger.LevelRequest
+			if len(body) > 0 {
+				_ = json.Unmarshal(body, &req)
+			}
+			if req.Level == "" {
+				req.Level = c.Query("level")
+			}
+
+			outcome := cfg.ApplyLevel(req.Level)
+			return c.Status(outcome.StatusCode).JSON(outcome.Body)
+
+		default:
+			return c.Status(fiber.StatusMethodNotAllowed).JSON(fiber.Map{
+				"error": "Method Not Allowed",
+			})
+		}
+	}
+}
+
+// RegisterLevelEndpoint registers the log level endpoint on a Fiber app.
+// It is the Fiber counterpart of logger.RegisterLevelEndpoint.
+func RegisterLevelEndpoint(app *fiber.App, path string, cfg LevelHandlerConfig) {
+	handler := LevelHandler(cfg)
+	app.Get(path, handler)
+	app.Put(path, handler)
+	app.Post(path, handler)
+}

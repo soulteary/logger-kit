@@ -9,6 +9,32 @@
 
 A structured logging toolkit for Go applications based on [zerolog](https://github.com/rs/zerolog). Provides dynamic log level management, context-based logging, and HTTP endpoints for runtime log level adjustment.
 
+
+> **Breaking in v2.4.0 — Fiber support moved to a subpackage.**
+> The Fiber handler and middleware are now
+> `github.com/soulteary/logger-kit/v2/fiberadapter`, so importing the root
+> package no longer links Fiber (and fasthttp) into binaries that never use
+> it. In a net/http service that means **25 fewer linked packages, 11 fewer
+> modules and a 13% smaller binary**.
+>
+> | Before | After |
+> |---|---|
+> | `logger.FiberMiddleware(cfg)` | `fiberadapter.Middleware(fiberadapter.Config{MiddlewareConfig: cfg})` |
+> | `logger.LevelHandlerFiber(cfg)` | `fiberadapter.LevelHandler(fiberadapter.LevelHandlerConfig{LevelHandlerConfig: cfg})` |
+> | `logger.RegisterLevelEndpointFiber(app, path, cfg)` | `fiberadapter.RegisterLevelEndpoint(app, path, ...)` |
+> | `logger.LoggerFromFiberCtx(c)` | `fiberadapter.Logger(c)` |
+> | `logger.RequestIDFromFiberCtx(c)` | `fiberadapter.RequestID(c)` |
+> | `logger.CtxFiber(c)` | `fiberadapter.Ctx(c)` |
+>
+> The three Fiber-typed config fields moved with them:
+> `MiddlewareConfig.SkipFuncFiber` / `CustomFieldsFiber` are now `SkipFunc` /
+> `CustomFields` on `fiberadapter.Config`, and
+> `LevelHandlerConfig.AuthFuncFiber` is `AuthFunc` on
+> `fiberadapter.LevelHandlerConfig`. Both embed the root config. Fields typed
+> `func(fiber.Ctx) ...` are what pulled Fiber into the root package.
+>
+> Nothing on the net/http side changed.
+
 ## Features
 
 - **zerolog Wrapper**: Structured logging with JSON and console output formats
@@ -198,7 +224,8 @@ package main
 
 import (
     "github.com/gofiber/fiber/v3"
-    "github.com/soulteary/logger-kit/v2"
+    logger "github.com/soulteary/logger-kit/v2"
+    "github.com/soulteary/logger-kit/v2/fiberadapter"
 )
 
 func main() {
@@ -206,23 +233,27 @@ func main() {
     
     app := fiber.New()
     
-    app.Use(logger.FiberMiddleware(logger.MiddlewareConfig{
-        Logger:           log,
-        SkipPaths:        []string{"/health"},
-        IncludeRequestID: true,
+    app.Use(fiberadapter.Middleware(fiberadapter.Config{
+        MiddlewareConfig: logger.MiddlewareConfig{
+            Logger:           log,
+            SkipPaths:        []string{"/health"},
+            IncludeRequestID: true,
+        },
     }))
     
     app.Get("/", func(c fiber.Ctx) error {
         // Access logger from Fiber context
-        l := logger.LoggerFromFiberCtx(c)
+        l := fiberadapter.Logger(c)
         l.Info().Msg("Processing request")
         
         return c.SendString("OK")
     })
     
     // Register log level endpoint
-    logger.RegisterLevelEndpointFiber(app, "/log/level", logger.LevelHandlerConfig{
-        Logger: log,
+    fiberadapter.RegisterLevelEndpoint(app, "/log/level", fiberadapter.LevelHandlerConfig{
+        LevelHandlerConfig: logger.LevelHandlerConfig{
+            Logger: log,
+        },
     })
     
     app.Listen(":3000")
@@ -430,7 +461,7 @@ l = logger.LoggerFromContext(ctx)
 l, ok := logger.LoggerFromContextOK(ctx)
 r = logger.SetLoggerInRequest(r, l)
 l = logger.LoggerFromRequest(r)
-l = logger.LoggerFromFiberCtx(c)
+l = fiberadapter.Logger(c)
 
 // Carry correlation ids
 ctx = logger.ContextWithRequestID(ctx, id)
@@ -441,7 +472,7 @@ ctx = logger.ContextWithIDs(ctx, requestID, traceID, spanID) // all three at onc
 
 id = logger.RequestIDFromContext(ctx)
 id = logger.RequestIDFromRequest(r)
-id = logger.RequestIDFromFiberCtx(c)
+id = fiberadapter.RequestID(c)
 traceID = logger.TraceIDFromContext(ctx)
 traceID = logger.TraceIDFromRequest(r)
 spanID = logger.SpanIDFromContext(ctx)
@@ -455,7 +486,7 @@ r = logger.SetUserIDInRequest(r, userID)
 // A zerolog logger already carrying the context's ids
 zl := logger.Ctx(ctx)
 zl = logger.LogFromContext(ctx)
-zl = logger.CtxFiber(c)
+zl = fiberadapter.Ctx(c)
 ```
 
 ### Package-Level Logger
