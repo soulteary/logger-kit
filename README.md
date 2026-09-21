@@ -1,6 +1,6 @@
 # Logger Kit
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/logger-kit/v2.svg)](https://pkg.go.dev/github.com/soulteary/logger-kit/v2)
+[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/logger-kit/v3.svg)](https://pkg.go.dev/github.com/soulteary/logger-kit/v3)
 [![Go Report Card](.github/goreportcard.svg)](.github/goreportcard-report.md)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![codecov](https://codecov.io/gh/soulteary/logger-kit/graph/badge.svg)](https://codecov.io/gh/soulteary/logger-kit)
@@ -10,9 +10,19 @@
 A structured logging toolkit for Go applications based on [zerolog](https://github.com/rs/zerolog). Provides dynamic log level management, context-based logging, and HTTP endpoints for runtime log level adjustment.
 
 
-> **Breaking in v2.4.0 — Fiber support moved to a subpackage.**
+> **Breaking in v3.0.0 — new import path, and Fiber support moved to a subpackage.**
+>
+> ```diff
+> -import logger "github.com/soulteary/logger-kit/v2"
+> +import logger "github.com/soulteary/logger-kit/v3"
+> ```
+>
+> Go requires the major version in the import path, so **every** v2 importer
+> edits this line whether or not they use Fiber. That is the whole of the
+> upgrade for a net/http service — no API on that side changed.
+>
 > The Fiber handler and middleware are now
-> `github.com/soulteary/logger-kit/v2/fiberadapter`, so importing the root
+> `github.com/soulteary/logger-kit/v3/fiberadapter`, so importing the root
 > package no longer links Fiber (and fasthttp) into binaries that never use
 > it. In a net/http service that means **25 fewer linked packages, 11 fewer
 > modules and a 13% smaller binary**.
@@ -56,19 +66,27 @@ A structured logging toolkit for Go applications based on [zerolog](https://gith
 - `github.com/rs/zerolog`
 - `github.com/gofiber/fiber/v3` v3.4.0+ — **only if you import `fiberadapter`**
 
-This v2 module line targets Fiber v3. Applications still on Fiber v2 should
-remain on `github.com/soulteary/logger-kit` v1.
+Since v3.0.0 the root package does not import Fiber, so a net/http, Echo, Gin or
+chi service never links it — or downloads it. Fiber support lives in the
+`fiberadapter` subpackage and is only linked when you import it.
 
-Since v2.4.0 the root package does not import Fiber, so a net/http, Echo, Gin or
-chi service never links it — or downloads it.
+Which line to use:
+
+| your situation | module |
+|---|---|
+| Fiber v3, or no Fiber at all | `github.com/soulteary/logger-kit/v3` |
+| Fiber v2 | `github.com/soulteary/logger-kit` (v1) |
+
+The v2 line is the same library with Fiber welded into the root package; v3 is
+that weld removed. If you are on v2, see [Upgrade Notes (v3.0.0)](#upgrade-notes-v300).
 
 ## Installation
 
 ```bash
-go get github.com/soulteary/logger-kit/v2
+go get github.com/soulteary/logger-kit/v3
 ```
 
-Version 2 uses Fiber v3 for all Fiber-specific APIs. Applications that still use Fiber v2 should remain on logger-kit v1. The net/http APIs keep the same behavior.
+Note the `/v3` suffix: Go requires it in the import path for every major version past v1, so upgrading from v2 means editing your imports as well as your `go.mod`. The net/http APIs keep the same behavior.
 
 ## Quick Start
 
@@ -78,7 +96,7 @@ Version 2 uses Fiber v3 for all Fiber-specific APIs. Applications that still use
 package main
 
 import (
-    "github.com/soulteary/logger-kit/v2"
+    "github.com/soulteary/logger-kit/v3"
 )
 
 func main() {
@@ -107,7 +125,7 @@ package main
 import (
     "os"
     
-    "github.com/soulteary/logger-kit/v2"
+    "github.com/soulteary/logger-kit/v3"
 )
 
 func main() {
@@ -131,7 +149,7 @@ func main() {
 package main
 
 import (
-    "github.com/soulteary/logger-kit/v2"
+    "github.com/soulteary/logger-kit/v3"
 )
 
 func main() {
@@ -159,7 +177,7 @@ package main
 import (
     "net/http"
     
-    "github.com/soulteary/logger-kit/v2"
+    "github.com/soulteary/logger-kit/v3"
 )
 
 func main() {
@@ -191,7 +209,7 @@ package main
 import (
     "net/http"
     
-    "github.com/soulteary/logger-kit/v2"
+    "github.com/soulteary/logger-kit/v3"
 )
 
 func main() {
@@ -227,8 +245,8 @@ package main
 
 import (
     "github.com/gofiber/fiber/v3"
-    logger "github.com/soulteary/logger-kit/v2"
-    "github.com/soulteary/logger-kit/v2/fiberadapter"
+    logger "github.com/soulteary/logger-kit/v3"
+    "github.com/soulteary/logger-kit/v3/fiberadapter"
 )
 
 func main() {
@@ -271,7 +289,7 @@ package main
 import (
     "context"
     
-    "github.com/soulteary/logger-kit/v2"
+    "github.com/soulteary/logger-kit/v3"
 )
 
 func main() {
@@ -299,7 +317,7 @@ package main
 import (
     "os"
     
-    "github.com/soulteary/logger-kit/v2"
+    "github.com/soulteary/logger-kit/v3"
 )
 
 func main() {
@@ -320,7 +338,7 @@ func main() {
 package main
 
 import (
-    "github.com/soulteary/logger-kit/v2"
+    "github.com/soulteary/logger-kit/v3"
 )
 
 func main() {
@@ -607,9 +625,31 @@ cw := logger.NewConsoleWriter(logger.DefaultConsoleWriterConfig())
 `logger.DefaultFieldNames()` returns the `FieldNames` struct if you need to
 rename `level`, `message`, `time`, `caller`, `error` or `stack`.
 
-## Upgrade Notes (v2.4.0)
+## Upgrade Notes (v3.0.0)
 
-**Breaking: Fiber support moved to `fiberadapter`.** The note at the top of this
+**Breaking, in two parts.**
+
+**1. The import path is now `/v3`.** Every importer edits it:
+
+```bash
+go get github.com/soulteary/logger-kit/v3
+# then, across your tree:
+#   github.com/soulteary/logger-kit/v2 -> github.com/soulteary/logger-kit/v3
+```
+
+This is not a stylistic bump. v3 removes nine exported symbols from the root
+package — `FiberMiddleware`, `LevelHandlerFiber`, `RegisterLevelEndpointFiber`,
+`LoggerFromFiberCtx`, `RequestIDFromFiberCtx`, `CtxFiber`, and the
+`SkipFuncFiber` / `CustomFieldsFiber` / `AuthFuncFiber` config fields — and Go's
+semantic import versioning requires a new major, and therefore a new path, when
+exported API goes away. Shipping it as a v2 minor would have broken every
+`go get -u` on the v2 line at compile time.
+
+Keeping those six functions as deprecated shims was not an option either: their
+signatures take `fiber.Ctx`, so re-adding them would drag Fiber back into the
+root package and undo the reason for the release.
+
+**2. Fiber support moved to `fiberadapter`.** The note at the top of this
 file has the call-by-call migration table. Nothing on the net/http side changed.
 
 What the move buys a service that does not use Fiber: the root package no longer

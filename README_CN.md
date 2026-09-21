@@ -1,6 +1,6 @@
 # Logger Kit
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/logger-kit/v2.svg)](https://pkg.go.dev/github.com/soulteary/logger-kit/v2)
+[![Go Reference](https://pkg.go.dev/badge/github.com/soulteary/logger-kit/v3.svg)](https://pkg.go.dev/github.com/soulteary/logger-kit/v3)
 [![Go Report Card](.github/goreportcard.svg)](.github/goreportcard-report.md)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![codecov](https://codecov.io/gh/soulteary/logger-kit/graph/badge.svg)](https://codecov.io/gh/soulteary/logger-kit)
@@ -10,8 +10,17 @@
 基于 [zerolog](https://github.com/rs/zerolog) 的 Go 应用结构化日志工具包。提供动态日志级别管理、基于上下文的日志记录，以及用于运行时日志级别调整的 HTTP 端点。
 
 
-> **v2.4.0 破坏性变更 —— Fiber 支持移入子包。**
-> Fiber handler 与中间件现位于 `github.com/soulteary/logger-kit/v2/fiberadapter`，
+> **v3.0.0 破坏性变更 —— 导入路径变更，且 Fiber 支持移入子包。**
+>
+> ```diff
+> -import logger "github.com/soulteary/logger-kit/v2"
+> +import logger "github.com/soulteary/logger-kit/v3"
+> ```
+>
+> Go 要求导入路径带上主版本号，所以**每一个** v2 使用者都要改这一行，无论用不用
+> Fiber。对 net/http 服务来说，升级到此为止——那一侧的 API 没有任何变化。
+>
+> Fiber handler 与中间件现位于 `github.com/soulteary/logger-kit/v3/fiberadapter`，
 > 于是导入根包不再把 Fiber（以及 fasthttp）链接进用不到它的二进制。
 > 对一个 net/http 服务来说，这意味着**少链接 25 个包、少 11 个模块、二进制小 13%**。
 >
@@ -53,19 +62,26 @@
 - `github.com/rs/zerolog`
 - `github.com/gofiber/fiber/v3` v3.4.0+ —— **仅在你导入 `fiberadapter` 时需要**
 
-v2 模块线面向 Fiber v3。仍在 Fiber v2 上的应用请继续使用
-`github.com/soulteary/logger-kit` v1。
+自 v3.0.0 起根包不再导入 Fiber，因此 net/http、Echo、Gin 或 chi 服务既不会链接它，
+也不会下载它。Fiber 支持位于 `fiberadapter` 子包，只有你导入它时才会被链接。
 
-自 v2.4.0 起根包不再导入 Fiber，因此 net/http、Echo、Gin 或 chi 服务既不会链接它，
-也不会下载它。
+该用哪条线：
+
+| 你的情况 | 模块 |
+|---|---|
+| 使用 Fiber v3，或完全不用 Fiber | `github.com/soulteary/logger-kit/v3` |
+| 使用 Fiber v2 | `github.com/soulteary/logger-kit`（v1） |
+
+v2 线是同一个库、但把 Fiber 焊死在根包里；v3 就是把这道焊缝拆掉。若你在 v2 上，
+见[升级说明（v3.0.0）](#升级说明v300)。
 
 ## 安装
 
 ```bash
-go get github.com/soulteary/logger-kit/v2
+go get github.com/soulteary/logger-kit/v3
 ```
 
-v2 的所有 Fiber 专用 API 均基于 Fiber v3。仍使用 Fiber v2 的应用应继续使用 logger-kit v1；net/http API 的行为保持不变。
+注意 `/v3` 后缀：Go 要求 v1 之后的每个主版本都在导入路径中带上它，所以从 v2 升级意味着除了改 `go.mod` 还要改所有 import。net/http API 的行为保持不变。
 
 ## 快速开始
 
@@ -75,7 +91,7 @@ v2 的所有 Fiber 专用 API 均基于 Fiber v3。仍使用 Fiber v2 的应用�
 package main
 
 import (
-    "github.com/soulteary/logger-kit/v2"
+    "github.com/soulteary/logger-kit/v3"
 )
 
 func main() {
@@ -104,7 +120,7 @@ package main
 import (
     "os"
     
-    "github.com/soulteary/logger-kit/v2"
+    "github.com/soulteary/logger-kit/v3"
 )
 
 func main() {
@@ -128,7 +144,7 @@ func main() {
 package main
 
 import (
-    "github.com/soulteary/logger-kit/v2"
+    "github.com/soulteary/logger-kit/v3"
 )
 
 func main() {
@@ -156,7 +172,7 @@ package main
 import (
     "net/http"
     
-    "github.com/soulteary/logger-kit/v2"
+    "github.com/soulteary/logger-kit/v3"
 )
 
 func main() {
@@ -188,7 +204,7 @@ package main
 import (
     "net/http"
     
-    "github.com/soulteary/logger-kit/v2"
+    "github.com/soulteary/logger-kit/v3"
 )
 
 func main() {
@@ -224,8 +240,8 @@ package main
 
 import (
     "github.com/gofiber/fiber/v3"
-    logger "github.com/soulteary/logger-kit/v2"
-    "github.com/soulteary/logger-kit/v2/fiberadapter"
+    logger "github.com/soulteary/logger-kit/v3"
+    "github.com/soulteary/logger-kit/v3/fiberadapter"
 )
 
 func main() {
@@ -268,7 +284,7 @@ package main
 import (
     "context"
     
-    "github.com/soulteary/logger-kit/v2"
+    "github.com/soulteary/logger-kit/v3"
 )
 
 func main() {
@@ -296,7 +312,7 @@ package main
 import (
     "os"
     
-    "github.com/soulteary/logger-kit/v2"
+    "github.com/soulteary/logger-kit/v3"
 )
 
 func main() {
@@ -317,7 +333,7 @@ func main() {
 package main
 
 import (
-    "github.com/soulteary/logger-kit/v2"
+    "github.com/soulteary/logger-kit/v3"
 )
 
 func main() {
@@ -594,9 +610,29 @@ cw := logger.NewConsoleWriter(logger.DefaultConsoleWriterConfig())
 返回 `FieldNames` 结构体，可用于重命名 `level`、`message`、`time`、`caller`、
 `error` 和 `stack`。
 
-## 升级说明（v2.4.0）
+## 升级说明（v3.0.0）
 
-**破坏性变更：Fiber 支持移入 `fiberadapter`。** 本文件顶部的说明里有逐个调用的迁移
+**破坏性变更分两部分。**
+
+**1. 导入路径变为 `/v3`。** 每个使用者都要改：
+
+```bash
+go get github.com/soulteary/logger-kit/v3
+# 然后在你的代码树里全局替换：
+#   github.com/soulteary/logger-kit/v2 -> github.com/soulteary/logger-kit/v3
+```
+
+这不是随意的版本号调整。v3 从根包移除了 9 个导出符号——`FiberMiddleware`、
+`LevelHandlerFiber`、`RegisterLevelEndpointFiber`、`LoggerFromFiberCtx`、
+`RequestIDFromFiberCtx`、`CtxFiber`，以及 `SkipFuncFiber` / `CustomFieldsFiber` /
+`AuthFuncFiber` 三个配置字段。Go 的语义导入版本规则要求：移除导出 API 必须升主版本，
+因而必须换路径。若作为 v2 的小版本发布，v2 线上所有执行 `go get -u` 的用户都会在
+编译期直接失败。
+
+把那 6 个函数作为废弃垫片保留也行不通：它们的签名带 `fiber.Ctx`，加回去就等于把
+Fiber 重新拖进根包，本次发布的意义随之归零。
+
+**2. Fiber 支持移入 `fiberadapter`。** 本文件顶部的说明里有逐个调用的迁移
 对照表。net/http 一侧没有任何变化。
 
 这次搬迁给不使用 Fiber 的服务带来什么：根包不再导入 Fiber，因此这类二进制少链接

@@ -19,8 +19,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	logkit "github.com/soulteary/logger-kit/v2"
-	"github.com/soulteary/logger-kit/v2/fiberadapter"
+	logkit "github.com/soulteary/logger-kit/v3"
+	"github.com/soulteary/logger-kit/v3/fiberadapter"
 )
 
 // fiberTestPeer is the RemoteAddr fiber's app.Test gives every request.

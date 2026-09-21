@@ -9,14 +9,17 @@ package logger_test
 
 import (
 	"bytes"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	logkit "github.com/soulteary/logger-kit/v2"
+	logkit "github.com/soulteary/logger-kit/v3"
 )
 
 // fakeSource is the minimal ClientIPSource an adapter would write.
@@ -477,4 +480,145 @@ func TestNewRequestID_IsAUniqueUUID(t *testing.T) {
 	second := logkit.NewRequestID()
 	assert.NotEqual(t, first, second)
 	assert.Len(t, first, 36)
+}
+
+func TestMiddlewareConfig_BodyForLog(t *testing.T) {
+	cfg := logkit.MiddlewareConfig{}.Normalized()
+	keys := cfg.SensitiveBodyKeys()
+
+	t.Run("empty body logs nothing", func(t *testing.T) {
+		assert.Equal(t, "", cfg.BodyForLog("application/json", nil, keys))
+		assert.Equal(t, "", cfg.BodyForLog("application/json", []byte{}, keys))
+	})
+
+	t.Run("redacts by the shared rule", func(t *testing.T) {
+		out := cfg.BodyForLog("application/json", []byte(`{"password":"hunter2"}`), keys)
+		assert.NotContains(t, out, "hunter2")
+		assert.Contains(t, out, "***")
+		assert.NotContains(t, out, "[truncated]")
+	})
+
+	t.Run("marks a truncated body", func(t *testing.T) {
+		small := logkit.MiddlewareConfig{MaxBodySize: 4}.Normalized()
+		out := small.BodyForLog("text/plain", []byte("abcdefgh"), keys)
+		assert.True(t, strings.HasSuffix(out, "...[truncated]"), "got %q", out)
+	})
+
+	t.Run("a body of exactly MaxBodySize is not marked truncated", func(t *testing.T) {
+		small := logkit.MiddlewareConfig{MaxBodySize: 8, DisableBodyRedaction: true}.Normalized()
+		assert.Equal(t, "abcdefgh", small.BodyForLog("text/plain", []byte("abcdefgh"), keys))
+	})
+
+	t.Run("DisableBodyRedaction logs verbatim", func(t *testing.T) {
+		raw := logkit.MiddlewareConfig{DisableBodyRedaction: true}.Normalized()
+		assert.Equal(t, `{"password":"hunter2"}`,
+			raw.BodyForLog("application/json", []byte(`{"password":"hunter2"}`), keys))
+	})
+}
+
+func TestMiddlewareConfig_LogRequest(t *testing.T) {
+	entry := func(t *testing.T, cfg logkit.MiddlewareConfig, f logkit.RequestFields) map[string]interface{} {
+		t.Helper()
+		var buf bytes.Buffer
+		cfg.Logger = logkit.New(logkit.Config{Level: logkit.TraceLevel, Output: &buf, Format: logkit.FormatJSON})
+		cfg.LogRequest(f)
+		var m map[string]interface{}
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &m))
+		return m
+	}
+
+	base := logkit.RequestFields{Method: "GET", Path: "/x", Status: 200, ClientIP: "192.0.2.1"}
+
+	t.Run("status picks the level", func(t *testing.T) {
+		cfg := logkit.MiddlewareConfig{}.Normalized()
+		for status, want := range map[int]string{200: "info", 302: "info", 404: "warn", 499: "warn", 500: "error", 503: "error"} {
+			f := base
+			f.Status = status
+			assert.Equal(t, want, entry(t, cfg, f)["level"], "status %d", status)
+		}
+	})
+
+	t.Run("a request id is withheld when IncludeRequestID is off", func(t *testing.T) {
+		f := base
+		f.RequestID = "given-id"
+
+		off := entry(t, logkit.MiddlewareConfig{}.Normalized(), f)
+		assert.NotContains(t, off, "request_id", "a caller-supplied id must not leak into the log")
+
+		on := logkit.MiddlewareConfig{IncludeRequestID: true}.Normalized()
+		assert.Equal(t, "given-id", entry(t, on, f)["request_id"])
+	})
+
+	t.Run("query is redacted here, not by the caller", func(t *testing.T) {
+		cfg := logkit.MiddlewareConfig{IncludeQuery: true}.Normalized()
+		f := base
+		f.RawQuery = "a=1&token=sekrit"
+		q, _ := entry(t, cfg, f)["query"].(string)
+		assert.NotContains(t, q, "sekrit")
+		assert.Contains(t, q, "***")
+	})
+
+	t.Run("an empty RawQuery is omitted", func(t *testing.T) {
+		cfg := logkit.MiddlewareConfig{IncludeQuery: true}.Normalized()
+		assert.NotContains(t, entry(t, cfg, base), "query")
+	})
+
+	t.Run("an empty but non-nil Headers map still logs headers", func(t *testing.T) {
+		f := base
+		f.Headers = map[string]string{}
+		assert.Contains(t, entry(t, logkit.MiddlewareConfig{}.Normalized(), f), "headers")
+
+		assert.NotContains(t, entry(t, logkit.MiddlewareConfig{}.Normalized(), base), "headers")
+	})
+
+	t.Run("size is omitted when not positive", func(t *testing.T) {
+		cfg := logkit.MiddlewareConfig{}.Normalized()
+		assert.NotContains(t, entry(t, cfg, base), "size")
+		f := base
+		f.Size = 7
+		assert.Equal(t, float64(7), entry(t, cfg, f)["size"])
+	})
+
+	t.Run("custom fields and an error are attached", func(t *testing.T) {
+		f := base
+		f.Custom = map[string]interface{}{"tenant": "acme"}
+		f.Err = errors.New("boom")
+		m := entry(t, logkit.MiddlewareConfig{}.Normalized(), f)
+		assert.Equal(t, "acme", m["tenant"])
+		assert.Equal(t, "boom", m["error"])
+	})
+
+	t.Run("a nil Logger falls back to the package default", func(t *testing.T) {
+		var buf bytes.Buffer
+		previous := logkit.Default()
+		logkit.SetDefault(logkit.New(logkit.Config{Level: logkit.TraceLevel, Output: &buf, Format: logkit.FormatJSON}))
+		defer logkit.SetDefault(previous)
+
+		logkit.MiddlewareConfig{}.LogRequest(base)
+		assert.Contains(t, buf.String(), `"path":"/x"`)
+	})
+}
+
+func TestMiddleware_BodyIsCapturedOnlyForBodyMethods(t *testing.T) {
+	logged := func(t *testing.T, method string) map[string]interface{} {
+		t.Helper()
+		var buf bytes.Buffer
+		log := logkit.New(logkit.Config{Level: logkit.TraceLevel, Output: &buf, Format: logkit.FormatJSON})
+		h := logkit.Middleware(logkit.MiddlewareConfig{Logger: log, IncludeBody: true})(
+			http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusOK) }),
+		)
+		req := httptest.NewRequest(method, "/x", strings.NewReader(`{"a":1}`))
+		req.Header.Set("Content-Type", "application/json")
+		h.ServeHTTP(httptest.NewRecorder(), req)
+		var m map[string]interface{}
+		require.NoError(t, json.Unmarshal(buf.Bytes(), &m))
+		return m
+	}
+
+	for _, method := range []string{http.MethodPost, http.MethodPut, http.MethodPatch} {
+		assert.Contains(t, logged(t, method), "request_body", "%s should capture a body", method)
+	}
+	for _, method := range []string{http.MethodGet, http.MethodDelete, http.MethodHead} {
+		assert.NotContains(t, logged(t, method), "request_body", "%s should not capture a body", method)
+	}
 }

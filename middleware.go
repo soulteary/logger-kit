@@ -281,154 +281,242 @@ func (cfg MiddlewareConfig) SensitiveHeaderSet() map[string]bool {
 	return set
 }
 
+// RequestFields is the framework-independent field set for one request log
+// line. An adapter fills it in and calls LogRequest; which fields appear, what
+// they are named and in what order then cannot drift between frameworks.
+//
+// Values arrive already resolved: Query is redacted (RedactQuery), Body is
+// redacted and truncated (BodyForLog), Headers is redacted, and ClientIP has
+// been through ClientIP. This type carries no policy -- the policy is in the
+// functions that produce those values.
+type RequestFields struct {
+	Method    string
+	Path      string
+	Status    int
+	ClientIP  string
+	UserAgent string
+
+	// RequestID is written only when IncludeRequestID is set and it is
+	// non-empty. A caller-supplied header on a config with IncludeRequestID
+	// off is deliberately not logged.
+	RequestID string
+
+	// Latency is written only when IncludeLatency is set.
+	Latency time.Duration
+
+	// RawQuery is the request's raw query string. LogRequest redacts it with
+	// SensitiveQueryKeys and omits it when empty -- the redaction lives there
+	// so an adapter cannot log a query string this package would have masked.
+	RawQuery string
+
+	// Headers is omitted when nil. An empty non-nil map still logs `headers`,
+	// which is what "IncludeHeaders on a request with none" has always done.
+	Headers map[string]string
+
+	// Body is omitted when empty.
+	Body string
+
+	// Size is the response size; omitted when not positive. Frameworks that do
+	// not track it leave it zero.
+	Size int
+
+	// Custom is added after the standard fields.
+	Custom map[string]interface{}
+
+	// Err is attached when non-nil.
+	Err error
+}
+
+// levelForStatus is the configured level for a response status: ErrorLevel
+// from 500, WarnLevel from 400, LogLevel below that.
+func (cfg MiddlewareConfig) levelForStatus(status int) Level {
+	switch {
+	case status >= 500:
+		return cfg.ErrorLevel
+	case status >= 400:
+		return cfg.WarnLevel
+	default:
+		return cfg.LogLevel
+	}
+}
+
+// LogRequest writes the one "HTTP request" line for a finished request, at the
+// level the status maps to.
+//
+// Exported so every adapter emits the same line. Field names and their order
+// diverging between frameworks is the same class of problem as a redaction
+// rule diverging: it breaks whatever reads the logs, and it breaks it only on
+// one framework, which is the hard kind to notice.
+func (cfg MiddlewareConfig) LogRequest(f RequestFields) {
+	l := cfg.Logger
+	if l == nil {
+		l = defaultLogger
+	}
+
+	zl := l.Zerolog()
+	event := zl.WithLevel(cfg.levelForStatus(f.Status).ToZerolog())
+
+	event = event.
+		Str("method", f.Method).
+		Str("path", f.Path).
+		Int("status", f.Status).
+		Str("ip", f.ClientIP).
+		Str("user_agent", f.UserAgent)
+
+	if cfg.IncludeRequestID && f.RequestID != "" {
+		event = event.Str("request_id", f.RequestID)
+	}
+	if cfg.IncludeLatency {
+		event = event.Dur("latency", f.Latency)
+	}
+	if cfg.IncludeQuery && f.RawQuery != "" {
+		event = event.Str("query", RedactQuery(f.RawQuery, cfg.SensitiveQueryKeys()))
+	}
+	if f.Headers != nil {
+		event = event.Interface("headers", f.Headers)
+	}
+	if f.Body != "" {
+		event = event.Str("request_body", f.Body)
+	}
+	if f.Size > 0 {
+		event = event.Int("size", f.Size)
+	}
+	for key, value := range f.Custom {
+		event = event.Interface(key, value)
+	}
+	if f.Err != nil {
+		event = event.Err(f.Err)
+	}
+
+	event.Msg("HTTP request")
+}
+
+// BodyForLog is the request_body value for a captured body: truncated to
+// MaxBodySize, redacted unless DisableBodyRedaction, with a marker appended
+// when it was cut. Empty when there is nothing to log.
+//
+// Exported so an adapter truncates and redacts by the same rule.
+func (cfg MiddlewareConfig) BodyForLog(contentType string, body []byte, sensitive []string) string {
+	if len(body) == 0 {
+		return ""
+	}
+	truncated := len(body) > cfg.MaxBodySize
+	if truncated {
+		body = body[:cfg.MaxBodySize]
+	}
+	logged := string(body)
+	if !cfg.DisableBodyRedaction {
+		logged = RedactBody(contentType, body, sensitive)
+	}
+	if truncated {
+		logged += "...[truncated]"
+	}
+	return logged
+}
+
+// installRequestID resolves the request id, propagates it onto the request
+// header, the response header and the request context, and returns it with the
+// possibly-rewrapped request.
+func (cfg MiddlewareConfig) installRequestID(w http.ResponseWriter, r *http.Request) (*http.Request, string) {
+	requestID := r.Header.Get(cfg.RequestIDHeader)
+	if requestID == "" && cfg.IncludeRequestID {
+		if cfg.GenerateRequestID != nil {
+			requestID = cfg.GenerateRequestID()
+		} else {
+			requestID = NewRequestID()
+		}
+		r.Header.Set(cfg.RequestIDHeader, requestID)
+	}
+	if cfg.IncludeRequestID && requestID != "" {
+		w.Header().Set(cfg.RequestIDHeader, requestID)
+	}
+	if requestID != "" {
+		r = r.WithContext(ContextWithRequestID(r.Context(), requestID))
+	}
+	return r, requestID
+}
+
+// captureBody buffers the request body for logging and leaves r.Body
+// replayable by the next handler.
+//
+// It reads one byte past the limit, so truncation is detectable: capping the
+// read at exactly MaxBodySize made a complete body of that size
+// indistinguishable from a truncated one.
+func (cfg MiddlewareConfig) captureBody(r *http.Request) (*http.Request, []byte) {
+	if !cfg.IncludeBody || r.Body == nil {
+		return r, nil
+	}
+	switch r.Method {
+	case http.MethodPost, http.MethodPut, http.MethodPatch:
+	default:
+		return r, nil
+	}
+	buf, _ := io.ReadAll(io.LimitReader(r.Body, int64(cfg.MaxBodySize)+1))
+	r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(buf), r.Body))
+	return r, buf
+}
+
+// redactedHeaders is the request's headers with the sensitive ones masked.
+func redactedHeaders(h http.Header, sensitive map[string]bool) map[string]string {
+	headers := make(map[string]string, len(h))
+	for name, values := range h {
+		if sensitive[strings.ToLower(name)] {
+			headers[name] = "[REDACTED]"
+		} else if len(values) > 0 {
+			headers[name] = values[0]
+		}
+	}
+	return headers
+}
+
 // Middleware creates a standard net/http logging middleware.
 func Middleware(cfg MiddlewareConfig) func(http.Handler) http.Handler {
 	cfg = cfg.Normalized()
 	skipPathMap := cfg.SkipPathSet()
 	sensitiveHeaderMap := cfg.SensitiveHeaderSet()
 	sensitiveBodyFields := cfg.SensitiveBodyKeys()
-	sensitiveQueryKeys := cfg.SensitiveQueryKeys()
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Skip if path is in skip list
-			if skipPathMap[r.URL.Path] {
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			// Skip if skip function returns true
-			if cfg.SkipFunc != nil && cfg.SkipFunc(r) {
+			// Skip if the path is in the skip list, or the skip func says so
+			if skipPathMap[r.URL.Path] || (cfg.SkipFunc != nil && cfg.SkipFunc(r)) {
 				next.ServeHTTP(w, r)
 				return
 			}
 
 			start := time.Now()
 
-			// Handle request ID
-			requestID := r.Header.Get(cfg.RequestIDHeader)
-			if requestID == "" && cfg.IncludeRequestID {
-				if cfg.GenerateRequestID != nil {
-					requestID = cfg.GenerateRequestID()
-				} else {
-					requestID = NewRequestID()
-				}
-				r.Header.Set(cfg.RequestIDHeader, requestID)
-			}
-
-			// Set request ID in response header
-			if cfg.IncludeRequestID && requestID != "" {
-				w.Header().Set(cfg.RequestIDHeader, requestID)
-			}
-
-			// Add request ID to context
-			if requestID != "" {
-				r = r.WithContext(ContextWithRequestID(r.Context(), requestID))
-			}
-
-			// Add logger to context
+			r, requestID := cfg.installRequestID(w, r)
 			r = r.WithContext(ContextWithLogger(r.Context(), cfg.Logger))
-
-			var requestBodyForLog []byte
-			if cfg.IncludeBody && (r.Method == http.MethodPost || r.Method == http.MethodPut || r.Method == http.MethodPatch) && r.Body != nil {
-				// One byte past the limit, so truncation is detectable. Capping
-				// the read at exactly MaxBodySize made a complete body of that
-				// size indistinguishable from a truncated one.
-				requestBodyForLog, _ = io.ReadAll(io.LimitReader(r.Body, int64(cfg.MaxBodySize)+1))
-				r.Body = io.NopCloser(io.MultiReader(bytes.NewReader(requestBodyForLog), r.Body))
-			}
+			r, requestBodyForLog := cfg.captureBody(r)
 
 			// Wrap response writer to capture status
 			rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
 
-			// Process request
 			next.ServeHTTP(rw, r)
 
-			// Calculate latency
-			latency := time.Since(start)
-
-			// Determine log level based on status code
-			var logLevel Level
-			switch {
-			case rw.status >= 500:
-				logLevel = cfg.ErrorLevel
-			case rw.status >= 400:
-				logLevel = cfg.WarnLevel
-			default:
-				logLevel = cfg.LogLevel
+			fields := RequestFields{
+				Method:    r.Method,
+				Path:      r.URL.Path,
+				Status:    rw.status,
+				ClientIP:  ClientIP(RequestSource(r), cfg.TrustedProxies),
+				UserAgent: r.UserAgent(),
+				RequestID: requestID,
+				Latency:   time.Since(start),
+				RawQuery:  r.URL.RawQuery,
+				Size:      rw.size,
 			}
-
-			// Build log event
-			zl := cfg.Logger.Zerolog()
-			event := zl.WithLevel(logLevel.ToZerolog())
-
-			// Add standard fields
-			event = event.
-				Str("method", r.Method).
-				Str("path", r.URL.Path).
-				Int("status", rw.status).
-				Str("ip", ClientIP(RequestSource(r), cfg.TrustedProxies)).
-				Str("user_agent", r.UserAgent())
-
-			// Add request ID
-			if cfg.IncludeRequestID && requestID != "" {
-				event = event.Str("request_id", requestID)
-			}
-
-			// Add latency
-			if cfg.IncludeLatency {
-				event = event.Dur("latency", latency)
-			}
-
-			// Add query parameters (with sensitive keys redacted)
-			if cfg.IncludeQuery && r.URL.RawQuery != "" {
-				event = event.Str("query", RedactQuery(r.URL.RawQuery, sensitiveQueryKeys))
-			}
-
-			// Add headers
 			if cfg.IncludeHeaders {
-				headers := make(map[string]string)
-				for name, values := range r.Header {
-					if sensitiveHeaderMap[strings.ToLower(name)] {
-						headers[name] = "[REDACTED]"
-					} else if len(values) > 0 {
-						headers[name] = values[0]
-					}
-				}
-				event = event.Interface("headers", headers)
+				fields.Headers = redactedHeaders(r.Header, sensitiveHeaderMap)
 			}
-
-			// Add request body (net/http: from buffered peek)
-			if cfg.IncludeBody && len(requestBodyForLog) > 0 {
-				body := requestBodyForLog
-				truncated := len(body) > cfg.MaxBodySize
-				if truncated {
-					body = body[:cfg.MaxBodySize]
-				}
-				logged := string(body)
-				if !cfg.DisableBodyRedaction {
-					logged = RedactBody(r.Header.Get("Content-Type"), body, sensitiveBodyFields)
-				}
-				if truncated {
-					logged += "...[truncated]"
-				}
-				event = event.Str("request_body", logged)
+			if cfg.IncludeBody {
+				fields.Body = cfg.BodyForLog(r.Header.Get("Content-Type"), requestBodyForLog, sensitiveBodyFields)
 			}
-
-			// Add response size
-			if rw.size > 0 {
-				event = event.Int("size", rw.size)
-			}
-
-			// Add custom fields
 			if cfg.CustomFields != nil {
-				for key, value := range cfg.CustomFields(r) {
-					event = event.Interface(key, value)
-				}
+				fields.Custom = cfg.CustomFields(r)
 			}
 
-			// Send log
-			event.Msg("HTTP request")
+			cfg.LogRequest(fields)
 		})
 	}
 }
