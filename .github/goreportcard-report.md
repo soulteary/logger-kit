@@ -1,31 +1,24 @@
 # Go Report Card
 
-**Grade: A+** (98.8%)
+**Grade: B** (76.5%)
 
 | Metric | Value |
 | ------ | ----- |
 | Files | 19 |
-| Issues | 2 |
+| Issues | 0 |
 
 ## Checks
 
 | Check | Score |
 | ----- | ----- |
-| go_vet | 100% |
 | gofmt | 100% |
-| ineffassign | 100% |
-| gocyclo | 89% |
+| go_vet | 100% |
+| gocyclo | 0% |
+| ineffassign | 0% |
 | license | 100% |
-| misspell | 100% |
+| misspell | 0% |
 
-## Issues
-
-### gocyclo
-
-- `middleware.go`
-  - Line 285: cyclomatic complexity 34 for function Middleware
-- `fiberadapter/fiberadapter.go`
-  - Line 63: cyclomatic complexity 28 for function Middleware
+No issues found. Nice work!
 
 ---
 
