@@ -58,7 +58,7 @@
 
 ## 环境要求
 
-- **Go 1.27+**（`go.mod` 声明 `go 1.27.0`）
+- **Go 1.27+**（`go.mod` 声明 `go 1.27.2`）
 - `github.com/rs/zerolog`
 - `github.com/gofiber/fiber/v3` v3.4.0+ —— **仅在你导入 `fiberadapter` 时需要**
 
