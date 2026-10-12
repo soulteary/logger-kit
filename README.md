@@ -59,7 +59,7 @@ A structured logging toolkit for Go applications based on [zerolog](https://gith
 
 ## Requirements
 
-- **Go 1.27+** (`go.mod` declares `go 1.27.2`)
+- **Go 1.27.2+** (`go.mod` declares `go 1.27.2`)
 - `github.com/rs/zerolog`
 - `github.com/gofiber/fiber/v3` v3.4.0+ — **only if you import `fiberadapter`**
 
