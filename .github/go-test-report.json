@@ -1,24 +1,24 @@
 {
   "schema_version": "1.0",
   "tests": {
-    "total": 200,
-    "passed": 200,
+    "total": 208,
+    "passed": 208,
     "failed": 0,
     "skipped": 0
   },
   "coverage": {
-    "covered_statements": 624,
+    "covered_statements": 625,
     "total_statements": 626,
-    "percentage": 99.68,
+    "percentage": 99.84,
     "threshold": 0
   },
   "packages": [
     {
       "name": ".",
       "status": "pass",
-      "tests": 161,
+      "tests": 169,
       "failed": 0,
-      "coverage": 99.64
+      "coverage": 99.82
     },
     {
       "name": "fiberadapter",
