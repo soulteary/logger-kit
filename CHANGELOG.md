@@ -2,6 +2,14 @@
 
 Notable changes are documented below. Earlier releases are available in the repository tags and GitHub Releases.
 
+## [3.0.5] - 2026-11-13
+
+### Changed
+
+- Require Go 1.27.4, which carries security fixes to cgo, the go command, the compiler, the linker and `net/http`.
+
+The module path and the public API are unchanged.
+
 ## [3.0.4] - 2026-11-01
 
 ### Changed
