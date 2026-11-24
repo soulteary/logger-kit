@@ -2,6 +2,16 @@
 
 Notable changes are documented below. Earlier releases are available in the repository tags and GitHub Releases.
 
+## [Unreleased]
+
+### Changed
+
+- Refresh the Fiber adapter dependencies: schema v1.10.0, utils/v2 v2.6.5,
+  compress v1.20.5 and fasthttp v1.80.0.
+- Update `golang.org/x/crypto`, `net`, `sys` and `text` to v0.59.0, v0.63.0,
+  v0.50.0 and v0.44.0 respectively.
+
+
 ## [3.0.6] - 2026-11-13
 
 ### Changed
